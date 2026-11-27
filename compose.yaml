@@ -1,0 +1,17 @@
+services:
+  devmemory:
+    build: ./devmemory
+    environment:
+      DEVMEMORY_MODE: standalone
+      DEVMEMORY_TOKEN: ${DEVMEMORY_TOKEN:?Set a random token of at least 32 characters}
+    ports:
+      - '127.0.0.1:8099:8099'
+    volumes:
+      - memory:/data
+    restart: unless-stopped
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  memory:

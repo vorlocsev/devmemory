@@ -1,5 +1,5 @@
 """Opt-in loopback Streamable HTTP MCP (legacy lifecycle, JSON responses only)."""
-import argparse, hmac, json, os, re, secrets, threading, time
+import argparse, hmac, json, os, re, secrets, threading, time, ssl
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from server import Store, BoundedHTTPServer, SLUG
@@ -45,6 +45,8 @@ class Sessions:
 
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
+        self.request.settimeout(10)
+        if isinstance(self.request,ssl.SSLSocket): self.request.do_handshake()
         super().setup();self.connection.settimeout(10)
     def log_message(self,*args): pass
     def respond(self,status,payload=None,session_id=None):
@@ -63,7 +65,7 @@ class Handler(BaseHTTPRequestHandler):
     def guard(self):
         if self.path!='/mcp': self.respond(404);return False
         # Native clients only. Reject all browser origins, including null.
-        if self.headers.get_all('Origin') or self.headers.get_all('Host')!=[self.headers.get('Host')] or self.headers.get('Host') not in self.server.allowed_hosts:
+        if self.headers.get_all('Origin') or self.headers.get_all('Host')!=[self.headers.get('Host')] or (self.headers.get('Host') or '').lower() not in self.server.allowed_hosts:
             self.respond(403);return False
         values=self.headers.get_all('Authorization',[])
         if len(values)!=1 or not hmac.compare_digest(values[0].encode(),('Bearer '+self.server.agent_token).encode()):
@@ -111,14 +113,37 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self): self.session_method()
     def do_DELETE(self): self.session_method(True)
 
-def make_http_server(store,port,token,projects,allow_write=False):
+def valid_authority(value):
+    if not isinstance(value,str) or len(value)>259: return False
+    match=re.fullmatch(r'([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)(?::([0-9]{1,5}))?',value)
+    return bool(match and '..' not in match[1] and (match[2] is None or 1<=int(match[2])<=65535))
+
+class TLSHTTPServer(BoundedHTTPServer):
+    def __init__(self,address,handler,context):
+        self.context=context
+        super().__init__(address,handler)
+    def get_request(self):
+        sock,addr=super().get_request()
+        try:
+            # Handshake occurs in a bounded request worker, not the accept loop.
+            return self.context.wrap_socket(sock,server_side=True,do_handshake_on_connect=False),addr
+        except BaseException:
+            sock.close()
+            raise
+    def handle_error(self,request,address):
+        # TLS disconnects and malformed clients do not expose credentials or stack traces.
+        pass
+
+def make_http_server(store,port,token,projects,allow_write=False,*,tls=None,authority=None):
     if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',token):
         raise ValueError('Set DEVMEMORY_AGENT_TOKEN to a separate random URL-safe secret (32+ characters)')
     if not projects or any(not SLUG.fullmatch(p) for p in projects):
         raise ValueError('Explicit project allowlist required')
-    server=BoundedHTTPServer(('127.0.0.1',port),Handler)
+    if (tls is None)!=(authority is None): raise ValueError('TLS and explicit authority must be configured together')
+    if tls is not None and not valid_authority(authority): raise ValueError('Invalid MCP host authority')
+    server=TLSHTTPServer(('0.0.0.0',port),Handler,tls) if tls is not None else BoundedHTTPServer(('127.0.0.1',port),Handler)
     server.agent_token=token
-    server.allowed_hosts={'127.0.0.1:'+str(server.server_port),'localhost:'+str(server.server_port)}
+    server.allowed_hosts={authority.lower()} if tls is not None else {'127.0.0.1:'+str(server.server_port),'localhost:'+str(server.server_port)}
     server.sessions=Sessions(MemoryTools(store,projects,allow_write))
     return server
 

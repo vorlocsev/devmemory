@@ -4,6 +4,6 @@ ARG BUILD_VERSION=0.4.0
 LABEL io.hass.name="DevMemory" io.hass.description="Local-first development memory" io.hass.type="app" io.hass.version="$BUILD_VERSION" io.hass.arch="$BUILD_ARCH"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DEVMEMORY_DATA=/data DEVMEMORY_HOST=0.0.0.0 DEVMEMORY_MODE=ingress
 WORKDIR /app
-COPY server.py github_sync.py github_scheduler.py mcp_server.py mcp_http.py index.html app.js style.css ./
+COPY server.py github_sync.py github_scheduler.py mcp_server.py mcp_http.py mcp_managed.py index.html app.js style.css ./
 EXPOSE 8099
 CMD ["python", "server.py"]

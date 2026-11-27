@@ -2,7 +2,8 @@
 - Local stdio MCP adapter with legacy initialize handshake, six read tools and optional append-only reported memory.
 - Optional project allowlist, bounded input/results and subprocess wire tests.
 - Opt-in standalone Streamable HTTP MCP (legacy 2025 revisions), loopback-only, separate bearer token, explicit project allowlist, bounded expiring sessions.
-- No HA network mapping, OAuth, modern 2026 protocol or SSE stream yet.
+- Managed HA HTTPS MCP: explicit opt-in, unmapped port by default, TLS certificate from dedicated app configuration folder, fail-closed configuration, authenticated status endpoint.
+- OAuth, modern 2026 protocol and real third-party client acceptance remain pending.
 
 # 0.3.0 — preview
 - Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.

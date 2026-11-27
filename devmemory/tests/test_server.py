@@ -18,6 +18,24 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(dest.entries('beta','провер'),[])
         with self.assertRaises(sqlite3.IntegrityError): dest.restore(backup)
         self.assertEqual(dest.backup(),backup)
+    def test_legacy_backup_restore(self):
+        self.s.add(self.entry())
+        backup=self.s.backup()
+        backup['format']='devmemory-backup-v1'
+        del backup['payload']['github_bindings']
+        backup['sha256']=hashlib.sha256(canonical(backup['payload'])).hexdigest()
+        dest=Store(Path(self.tmp.name)/'legacy')
+        self.assertEqual(dest.restore(backup),{'projects':2,'entries':1})
+        self.assertEqual(dest.entries('alpha'),self.s.entries('alpha'))
+        self.assertEqual(dest.github_binding('alpha')['repository'],'')
+    def test_backup_binding_validation_atomic(self):
+        self.s.bind_github({'project':'alpha','repository':'owner/repo'})
+        backup=self.s.backup()
+        backup['payload']['github_bindings'].append({'project':'missing','repository':'owner/repo'})
+        backup['sha256']=hashlib.sha256(canonical(backup['payload'])).hexdigest()
+        dest=Store(Path(self.tmp.name)/'invalid')
+        with self.assertRaises(ValueError): dest.restore(backup)
+        self.assertEqual(dest.projects(),[])
     def test_backup_corruption_and_invalid_rows(self):
         self.s.add(self.entry()); backup=self.s.backup()
         dest=Store(Path(self.tmp.name)/'restored')
@@ -86,7 +104,7 @@ class HTTPTests(unittest.TestCase):
     def test_health_mode(self):
         with urllib.request.urlopen('http://127.0.0.1:'+str(self.s.server_port)+'/health',timeout=3) as r:
             data=json.load(r)
-        self.assertEqual(data,{'status':'ok','version':'0.2.3','mode':'standalone'})
+        self.assertEqual(data,{'status':'ok','version':'0.3.0','mode':'standalone'})
     def test_backup_api_auth_and_restore(self):
         self.assertEqual(self.request('/api/backup',token=False),403)
         self.assertEqual(self.request('/api/restore',{},token=False),403)
@@ -96,6 +114,13 @@ class HTTPTests(unittest.TestCase):
         with urllib.request.urlopen(req,timeout=3) as r: backup=json.load(r)
         self.assertEqual(self.request('/api/restore',backup),409)
         self.assertEqual(self.request('/api/restore',{}),400)
+    def test_github_binding_api(self):
+        self.assertEqual(self.request('/api/github/binding?project=demo',token=False),403)
+        self.assertEqual(self.request('/api/github/sync',{'project':'demo'},token=False),403)
+        self.assertEqual(self.request('/api/projects',{'slug':'demo','name':'Demo'}),201)
+        self.assertEqual(self.request('/api/github/binding',{'project':'demo','repository':'https://example.com'},),400)
+        self.assertEqual(self.request('/api/github/binding',{'project':'demo','repository':'owner/repo'}),200)
+        self.assertEqual(self.request('/api/github/binding?project=demo'),200)
     def test_api_auth(self): self.assertEqual(self.request('/api/projects',token=False),403)
     def test_auth_required_at_start(self):
         with self.assertRaises(ValueError): make_server('127.0.0.1',0,self.tmp.name,'standalone','short')

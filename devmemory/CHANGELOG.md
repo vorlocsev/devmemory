@@ -1,3 +1,11 @@
+# 0.3.0 — preview
+- Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.
+- Commits, PR head metadata and workflow run attempt/conclusion imported as historical evidence, not acceptance.
+- Deterministic deduplication and transactional journal/FTS writes; changed observations retained.
+- Opt-in automatic polling, persisted interval and shared five-minute gate; one-hour pause after HTTP 403/429; latest 20 attempts per project.
+- Optional fine-grained GitHub PAT via HA app options or standalone environment; private repository read support (live acceptance pending). Logical backup deliberately excludes scheduling, attempt history and cooldown; restored bindings require explicit re-enabling.
+- Logical backup v2 preserves repository bindings and imported evidence; legacy v1 remains accepted.
+
 # 0.2.3 — preview
 - Home Assistant store icon and logo with PNG integrity/dimension tests.
 - Consistent all-project logical JSON backup with SHA-256 integrity check and 4 MiB size bound.

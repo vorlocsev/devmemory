@@ -1,18 +1,21 @@
 """DevMemory: local-first project memory, standard library only."""
-import argparse, datetime, hashlib, hmac, json, os, re, signal, sqlite3, threading, uuid
+import argparse, datetime, hashlib, hmac, json, os, re, signal, sqlite3, threading, uuid, time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
+from github_sync import GitHubError, normalize_repo, fetch_snapshot, load_token, make_fetcher
+from github_scheduler import SyncBusy, SyncDeferred, run_sync, scheduler_loop
 
-VERSION='0.2.3'
+VERSION='0.3.0'
 KINDS={'decision','evidence','blocker','plan','lesson','note'}
 STATES={'verified','reported','proposed','unknown'}
 SLUG=re.compile(r'[a-z0-9][a-z0-9_-]{0,63}\Z')
 SHA=re.compile(r'[a-f0-9]{40}\Z')
 MAX_BODY=1048576
 MAX_BACKUP=4*1024*1024
-BACKUP_FORMAT='devmemory-backup-v1'
+BACKUP_FORMAT='devmemory-backup-v2'
+LEGACY_BACKUP_FORMAT='devmemory-backup-v1'
 PROJECT_FIELDS=('slug','name')
 ENTRY_FIELDS=('id','project','kind','status','title','body','source','sha','created')
 PAGE_SIZE=20
@@ -25,6 +28,12 @@ class Store:
             c.execute('PRAGMA journal_mode=WAL')
             c.executescript('''CREATE TABLE IF NOT EXISTS projects(slug TEXT PRIMARY KEY, name TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS entries(id TEXT PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(slug), kind TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, sha TEXT NOT NULL, created TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS github_bindings(project TEXT PRIMARY KEY REFERENCES projects(slug), repository TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS github_schedule(project TEXT PRIMARY KEY REFERENCES projects(slug), interval_minutes INTEGER NOT NULL, next_due INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS github_sync_log(id INTEGER PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(slug), repository TEXT NOT NULL, started INTEGER NOT NULL, finished INTEGER, state TEXT NOT NULL, inserted INTEGER NOT NULL DEFAULT 0, duplicates INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '');
+            CREATE INDEX IF NOT EXISTS github_sync_log_project ON github_sync_log(project,id);
+            CREATE TABLE IF NOT EXISTS github_gate(id INTEGER PRIMARY KEY CHECK(id=1), next_allowed INTEGER NOT NULL);
+            INSERT OR IGNORE INTO github_gate VALUES (1,0);
             CREATE INDEX IF NOT EXISTS entries_project ON entries(project,created);
             CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(id UNINDEXED, project UNINDEXED, title, body, tokenize='unicode61');''')
     @contextmanager
@@ -68,14 +77,106 @@ class Store:
             r=c.execute('DELETE FROM entries WHERE project=? AND id=?',(project,id))
             if not r.rowcount: return False
             c.execute('DELETE FROM search_index WHERE id=?',(id,)); return True
+    def github_binding(self,project):
+        if not SLUG.fullmatch(project): raise ValueError('Invalid project')
+        with self.db() as c:
+            if not c.execute('SELECT 1 FROM projects WHERE slug=?',(project,)).fetchone(): raise ValueError('Unknown project')
+            r=c.execute('SELECT repository FROM github_bindings WHERE project=?',(project,)).fetchone()
+        return {'project':project,'repository':r['repository'] if r else ''}
+
+    def bind_github(self,d):
+        p=field(d,'project',64); repo=normalize_repo(field(d,'repository',200))
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM projects WHERE slug=?',(p,)).fetchone(): raise ValueError('Unknown project')
+            previous=c.execute('SELECT repository FROM github_bindings WHERE project=?',(p,)).fetchone()
+            if previous and previous['repository']!=repo:
+                c.execute('DELETE FROM github_schedule WHERE project=?',(p,))
+            c.execute('INSERT INTO github_bindings VALUES (?,?) ON CONFLICT(project) DO UPDATE SET repository=excluded.repository',(p,repo))
+        return {'project':p,'repository':repo}
+
+    def github_settings(self,project):
+        self.github_binding(project)
+        with self.db() as c:
+            r=c.execute('SELECT interval_minutes,next_due FROM github_schedule WHERE project=?',(project,)).fetchone()
+            log=[dict(row) for row in c.execute('SELECT repository,started,finished,state,inserted,duplicates,error FROM github_sync_log WHERE project=? ORDER BY id DESC LIMIT 20',(project,))]
+            gate=c.execute('SELECT next_allowed FROM github_gate WHERE id=1').fetchone()[0]
+        return {'interval_minutes':r['interval_minutes'] if r else 0,'next_due':r['next_due'] if r else 0,'next_allowed':gate,'history':log}
+
+    def configure_github(self,d,now=None):
+        p=field(d,'project',64); minutes=d.get('interval_minutes')
+        if type(minutes) is not int or minutes not in (0,60,120,360,1440):
+            raise ValueError('Invalid sync interval')
+        now=int(time.time()) if now is None else now
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM github_bindings WHERE project=?',(p,)).fetchone():
+                raise ValueError('Bind a GitHub repository first')
+            c.execute('INSERT INTO github_schedule VALUES (?,?,?) ON CONFLICT(project) DO UPDATE SET interval_minutes=excluded.interval_minutes,next_due=excluded.next_due',(p,minutes,now+minutes*60 if minutes else 0))
+        return self.github_settings(p)
+
+    def due_github(self,now):
+        with self.db() as c:
+            if c.execute('SELECT next_allowed FROM github_gate WHERE id=1').fetchone()[0]>now: return None
+            r=c.execute('SELECT project FROM github_schedule WHERE interval_minutes>0 AND next_due<=? ORDER BY next_due,project LIMIT 1',(now,)).fetchone()
+            return r['project'] if r else None
+
+    def begin_github(self,project,automatic,now):
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            binding=c.execute('SELECT repository FROM github_bindings WHERE project=?',(project,)).fetchone()
+            if not binding: raise ValueError('Bind a GitHub repository first')
+            schedule=c.execute('SELECT interval_minutes,next_due FROM github_schedule WHERE project=?',(project,)).fetchone()
+            if automatic and (not schedule or not schedule['interval_minutes'] or schedule['next_due']>now):
+                return None
+            gate=c.execute('SELECT next_allowed FROM github_gate WHERE id=1').fetchone()[0]
+            if gate>now: raise SyncDeferred(gate-now)
+            # One request batch (three GETs maximum) per five minutes across all projects.
+            c.execute('UPDATE github_gate SET next_allowed=? WHERE id=1',(now+300,))
+            if schedule and schedule['interval_minutes']:
+                c.execute('UPDATE github_schedule SET next_due=? WHERE project=?',(now+schedule['interval_minutes']*60,project))
+            job=c.execute("INSERT INTO github_sync_log(project,repository,started,state) VALUES (?,?,?,'running')",(project,binding['repository'],now)).lastrowid
+            c.execute('DELETE FROM github_sync_log WHERE project=? AND id NOT IN (SELECT id FROM github_sync_log WHERE project=? ORDER BY id DESC LIMIT 20)',(project,project))
+            return job
+
+    def finish_github(self,job,now,result=None,error='',rate_limited=False):
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute('UPDATE github_sync_log SET finished=?,state=?,inserted=?,duplicates=?,error=? WHERE id=?',(now,'success' if result is not None else 'error',result['inserted'] if result else 0,result['duplicates'] if result else 0,error[:250],job))
+            if rate_limited:
+                c.execute('UPDATE github_gate SET next_allowed=max(next_allowed,?) WHERE id=1',(now+3600,))
+
+    def recover_github(self):
+        with self.db() as c:
+            c.execute("UPDATE github_sync_log SET state='interrupted',finished=?,error='Previous process stopped during sync' WHERE state='running'",(int(time.time()),))
+
+    def sync_github(self,project,fetcher=fetch_snapshot):
+        repo=self.github_binding(project)['repository']
+        if not repo: raise ValueError('Bind a GitHub repository first')
+        records=fetcher(repo)
+        now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+        inserted=0
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            current=c.execute('SELECT repository FROM github_bindings WHERE project=?',(project,)).fetchone()
+            if not current or current['repository']!=repo: raise ValueError('Repository binding changed; retry sync')
+            for item in records:
+                # The state is part of the key: repeated snapshots deduplicate, changed status is historical evidence.
+                identity=hashlib.sha256(canonical([project,repo,item])).hexdigest()[:32]
+                row=(identity,project,'evidence','verified',item['title'],item['body'],item['source'],item['sha'],now)
+                if c.execute('INSERT OR IGNORE INTO entries VALUES (?,?,?,?,?,?,?,?,?)',row).rowcount:
+                    c.execute('INSERT INTO search_index VALUES (?,?,?,?)',(identity,project,item['title'],item['body']))
+                    inserted+=1
+        return {'repository':repo,'observed':len(records),'inserted':inserted,'duplicates':len(records)-inserted,'scope':'latest 5 per endpoint, not exhaustive'}
+
     def backup(self):
-        # A single read transaction captures both tables at the same instant.
+        # One read transaction captures all persistent tables at the same instant.
         # FTS is derived data and is rebuilt on import, not trusted from a file.
-        payload={'projects':[],'entries':[]}
+        payload={'projects':[],'entries':[],'github_bindings':[]}
         used=512
         with self.db() as c:
             c.execute('BEGIN')
-            for table,order in [('projects','slug'),('entries','id')]:
+            for table,order in [('projects','slug'),('entries','id'),('github_bindings','project')]:
                 for row in c.execute('SELECT * FROM '+table+' ORDER BY '+order):
                     item=dict(row)
                     used+=len(canonical(item))+1
@@ -89,15 +190,16 @@ class Store:
 
     def restore(self,backup):
         # No SQL, file paths or SQLite pages from an upload are executed.
-        if set(backup)!={'format','payload','sha256'} or backup['format']!=BACKUP_FORMAT:
+        if set(backup)!={'format','payload','sha256'} or backup['format'] not in (BACKUP_FORMAT,LEGACY_BACKUP_FORMAT):
             raise ValueError('Unsupported backup format')
         payload=backup['payload']
-        if not isinstance(payload,dict) or set(payload)!={'projects','entries'}:
+        expected={'projects','entries','github_bindings'} if backup['format']==BACKUP_FORMAT else {'projects','entries'}
+        if not isinstance(payload,dict) or set(payload)!=expected:
             raise ValueError('Invalid backup payload')
         digest=backup['sha256']
         if not isinstance(digest,str) or not re.fullmatch(r'[a-f0-9]{64}',digest) or not hmac.compare_digest(digest,hashlib.sha256(canonical(payload)).hexdigest()):
             raise ValueError('Backup checksum mismatch')
-        if not all(isinstance(payload[k],list) for k in ('projects','entries')):
+        if not all(isinstance(payload[k],list) for k in expected):
             raise ValueError('Invalid backup collections')
         projects=set(); ids=set()
         for row in payload['projects']:
@@ -119,13 +221,21 @@ class Store:
             try: date=datetime.datetime.fromisoformat(row['created'])
             except ValueError: raise ValueError('Invalid creation date') from None
             if date.tzinfo is None: raise ValueError('Creation date requires timezone')
+        bindings=payload.get('github_bindings',[])
+        bound=set()
+        for row in bindings:
+            validate_row(row,{'project':64,'repository':200})
+            if row['project'] not in projects or row['project'] in bound or normalize_repo(row['repository'])!=row['repository']:
+                raise ValueError('Invalid or duplicate GitHub binding')
+            bound.add(row['project'])
         with self.db() as c:
             c.execute('BEGIN IMMEDIATE')
-            if c.execute('SELECT 1 FROM projects LIMIT 1').fetchone() or c.execute('SELECT 1 FROM entries LIMIT 1').fetchone():
+            if any(c.execute('SELECT 1 FROM '+table+' LIMIT 1').fetchone() for table in ('projects','entries','github_bindings')):
                 raise sqlite3.IntegrityError('Restore requires an empty database')
             c.execute('DELETE FROM search_index')
             c.executemany('INSERT INTO projects VALUES (?,?)',([row[k] for k in PROJECT_FIELDS] for row in payload['projects']))
             c.executemany('INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?)',([row[k] for k in ENTRY_FIELDS] for row in payload['entries']))
+            c.executemany('INSERT INTO github_bindings VALUES (?,?)',((row['project'],row['repository']) for row in bindings))
             c.execute('INSERT INTO search_index SELECT id,project,title,body FROM entries')
         return {'projects':len(projects),'entries':len(ids)}
 
@@ -205,6 +315,25 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send(409,{'error':'Restore requires an empty database; existing data unchanged'})
                     return self.send(201,result)
                 finally: self.server.backup_slot.release()
+            if method=='GET' and path=='/api/github/auth':
+                return self.send(200,{'configured':self.server.github_configured})
+            if method=='GET' and path=='/api/github/binding':
+                return self.send(200,db.github_binding(q.get('project',[''])[0]))
+            if method=='GET' and path=='/api/github/settings':
+                return self.send(200,db.github_settings(q.get('project',[''])[0]))
+            if method=='POST' and path in ('/api/github/binding','/api/github/settings'):
+                d=self.read_json()
+                if not self.server.github_slot.acquire(blocking=False):
+                    return self.send(503,{'error':'GitHub sync busy'})
+                try:
+                    return self.send(200,db.bind_github(d) if path.endswith('/binding') else db.configure_github(d))
+                finally: self.server.github_slot.release()
+            if method=='POST' and path=='/api/github/sync':
+                d=self.read_json(); project=field(d,'project',64)
+                try: return self.send(200,run_sync(db,self.server.github_slot,project,fetcher=self.server.github_fetcher))
+                except SyncBusy: return self.send(503,{'error':'GitHub sync busy'})
+                except SyncDeferred as e: return self.send(429,{'error':str(e),'retry_after':e.seconds})
+                except GitHubError as e: return self.send(502,{'error':str(e)})
             if method=='GET' and path=='/api/projects': return self.send(200,db.projects())
             if method=='POST' and path=='/api/projects': return self.send(201,db.add_project(self.read_json()))
             if method=='POST' and path=='/api/entries': return self.send(201,db.add(self.read_json()))
@@ -240,18 +369,29 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         try: super().process_request_thread(request,address)
         finally: self.slots.release()
 
-def make_server(host,port,data,mode,token=''):
+def make_server(host,port,data,mode,token='',github_token=''):
     if mode not in ('standalone','ingress'): raise ValueError('Invalid mode')
     if mode=='standalone' and len(token)<32: raise ValueError('Set DEVMEMORY_TOKEN (at least 32 characters)')
-    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.mode=mode; s.token=token; return s
+    fetcher=make_fetcher(github_token)
+    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.github_slot=threading.BoundedSemaphore(1); s.github_fetcher=fetcher; s.github_configured=bool(github_token); s.mode=mode; s.token=token; return s
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--host',default=os.getenv('DEVMEMORY_HOST','127.0.0.1')); p.add_argument('--port',type=int,default=int(os.getenv('DEVMEMORY_PORT','8099'))); p.add_argument('--data',default=os.getenv('DEVMEMORY_DATA','./data')); p.add_argument('--mode',choices=['standalone','ingress'],default=os.getenv('DEVMEMORY_MODE','standalone')); a=p.parse_args()
-    s=make_server(a.host,a.port,a.data,a.mode,os.getenv('DEVMEMORY_TOKEN','')); print(f'DevMemory {VERSION}: {a.host}:{a.port} ({a.mode})',flush=True)
+    try: github_token=load_token(a.mode,a.data,os.environ)
+    except ValueError as e: p.error(str(e))
+    s=make_server(a.host,a.port,a.data,a.mode,os.getenv('DEVMEMORY_TOKEN',''),github_token); print(f'DevMemory {VERSION}: {a.host}:{a.port} ({a.mode})',flush=True)
+    stop_scheduler=threading.Event()
+    s.store.recover_github()
+    worker=threading.Thread(target=scheduler_loop,args=(s.store,s.github_slot,stop_scheduler,s.github_fetcher),daemon=True,name='github-scheduler')
+    worker.start()
     def stop(signum,frame):
+        stop_scheduler.set()
         threading.Thread(target=s.shutdown,daemon=True).start()
     signal.signal(signal.SIGTERM,stop)
     signal.signal(signal.SIGINT,stop)
     try: s.serve_forever()
-    finally: s.server_close()
+    finally:
+        stop_scheduler.set()
+        s.server_close()
+        worker.join(timeout=1)
 if __name__=='__main__': main()

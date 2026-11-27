@@ -1,7 +1,7 @@
 import json, tempfile, threading, unittest, sys, urllib.request, urllib.error
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from server import Store,make_server
+from server import Store,make_server,CONTEXT_CHARS,MAX_WORKERS,PAGE_SIZE
 
 class StorageTests(unittest.TestCase):
     def setUp(self):
@@ -29,6 +29,16 @@ class StorageTests(unittest.TestCase):
         id=self.s.add(self.entry())['id']; self.assertFalse(self.s.delete('beta',id)); self.assertTrue(self.s.delete('alpha',id)); self.assertEqual(self.s.entries('alpha','ядра'),[])
     def test_context_labels(self):
         self.s.add(self.entry()); t=self.s.context('alpha'); self.assertIn('Historical memory',t); self.assertIn('reported',t)
+    def test_context_budget(self):
+        d=self.entry(); d['body']='я'*50000
+        self.s.add(d); ctx=self.s.context('alpha')
+        self.assertLessEqual(len(ctx),CONTEXT_CHARS)
+        self.assertIn('[Context limited;',ctx)
+    def test_pagination(self):
+        for i in range(PAGE_SIZE+2): self.s.add(self.entry())
+        first=self.s.entries('alpha'); second=self.s.entries('alpha',offset=PAGE_SIZE)
+        self.assertEqual(len(first),PAGE_SIZE); self.assertEqual(len(second),2)
+        self.assertFalse({x['id'] for x in first}&{x['id'] for x in second})
     def test_fts_syntax(self):
         self.s.add(self.entry()); self.assertEqual(self.s.entries('alpha','"***'),[])
 
@@ -55,5 +65,15 @@ class HTTPTests(unittest.TestCase):
     def test_write_marker(self): self.assertEqual(self.request('/api/projects',{'slug':'demo','name':'Demo'},marker=False),400)
     def test_ingress_deny_direct(self): self.s.mode='ingress'; self.assertEqual(self.request('/'),403)
     def test_static(self): self.assertEqual(self.request('/',token=False),200);self.assertEqual(self.request('/app.js',token=False),200)
+    def test_worker_limit(self):
+        self.assertEqual(MAX_WORKERS,8)
+        # Exhaust the exact same semaphore used by process_request.
+        for _ in range(MAX_WORKERS): self.assertTrue(self.s.slots.acquire(blocking=False))
+        try: self.assertFalse(self.s.slots.acquire(blocking=False))
+        finally:
+            for _ in range(MAX_WORKERS): self.s.slots.release()
+    def test_large_unicode_record(self):
+        self.assertEqual(self.request('/api/projects',{'slug':'demo','name':'Demo'}),201)
+        self.assertEqual(self.request('/api/entries',{'project':'demo','kind':'note','status':'reported','title':'Unicode','body':'😀'*50000}),201)
     def test_bad_json_shape(self): self.assertEqual(self.request('/api/projects',[]),400)
 if __name__=='__main__': unittest.main()

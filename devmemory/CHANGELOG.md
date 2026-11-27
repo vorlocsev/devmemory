@@ -4,6 +4,7 @@
 - Detect deployment mode from health endpoint; hide standalone authentication in Ingress.
 - Experimental store classification; no database schema changes.
 - Integration tabs are roadmap information only.
+- Browser CI exercises standalone API and simulated Ingress routing; serialized workspace actions and draft reset on logout.
 
 # 0.2.1 — preview
 - Bound HTTP concurrency to eight workers and reduce page size to 20.

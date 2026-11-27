@@ -62,6 +62,10 @@ async function main(){
     assert.equal(await page.locator('[data-tab=memory]').textContent(),'Память');
     await page.locator('[data-tab=settings]').click();await page.locator('#theme').selectOption('dark');
     assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+    const backupDownload=page.waitForEvent('download');await page.locator('#backupExport').click();
+    const backupFile=await backupDownload;assert.match(backupFile.suggestedFilename(),/^devmemory-backup-.*\.json$/);await ready(page);
+    const backupPath=await backupFile.path();const backup=JSON.parse(await fs.readFile(backupPath,'utf8'));
+    assert.equal(backup.format,'devmemory-backup-v1');assert.equal(backup.payload.projects.length,2);assert.equal(backup.payload.entries.length,1);
     await page.locator('#disconnect').click();await visible(page,'#auth');
     await page.reload();await visible(page,'#auth');await ready(page);
     assert.equal(await page.locator('#lang').inputValue(),'ru');
@@ -81,7 +85,7 @@ async function main(){
       const req=route.request(),u=new URL(req.url());
       assert.equal(req.headers().authorization,undefined,'browser must not send token in ingress mode');
       const target=u.pathname.slice('/fixture-ingress'.length)+u.search;
-      if(target==='/health')return route.fulfill({json:{status:'ok',version:'0.2.2',mode:'ingress'}});
+      if(target==='/health')return route.fulfill({json:{status:'ok',version:'0.2.3',mode:'ingress'}});
       const response=await route.fetch({url:origin+target,headers:{...req.headers(),authorization:'Bearer '+token}});
       return route.fulfill({response});
     });

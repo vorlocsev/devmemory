@@ -1,3 +1,10 @@
+# 0.2.3 — preview
+- Home Assistant store icon and logo with PNG integrity/dimension tests.
+- Consistent all-project logical JSON backup with SHA-256 integrity check and 4 MiB size bound.
+- Transactional restore to empty databases only; preserves IDs, timestamps and provenance; rebuilds FTS.
+- Authenticated export/import in Settings, no overwrite or database deletion endpoint.
+- Backup tests for roundtrip, checksum, bounds, isolation and refusal to overwrite.
+
 # 0.2.2 — preview
 - Responsive workspace with Memory, Projects, Integrations and Settings tabs.
 - Russian/English labels and system/light/dark appearance preferences.

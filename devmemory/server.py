@@ -315,6 +315,15 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send(409,{'error':'Restore requires an empty database; existing data unchanged'})
                     return self.send(201,result)
                 finally: self.server.backup_slot.release()
+            if method=='GET' and path=='/api/mcp/codex-setup':
+                status=self.server.mcp_status
+                if status['state']!='enabled': return self.send(409,{'error':'Enable managed HTTPS MCP first'})
+                from mcp_http import valid_authority
+                authority=status.get('authority')
+                if not valid_authority(authority): return self.send(409,{'error':'Invalid MCP authority'})
+                script=(Path(__file__).parent/'connect-codex.ps1').read_text(encoding='utf-8')
+                script=script.replace("[string]$Url = '__DEVMEMORY_URL__'","[string]$Url = 'https://"+authority+"/mcp'",1)
+                return self.send(200,script,'text/plain; charset=utf-8')
             if method=='GET' and path=='/api/mcp/status':
                 return self.send(200,self.server.mcp_status)
             if method=='GET' and path=='/api/github/auth':

@@ -131,6 +131,7 @@ async function main(){
     assert.ok(await ip.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'no horizontal page overflow in desktop workspace');
     await ip.locator('[data-tab=integrations]').click();await visible(ip,'[data-panel=integrations]');
     assert.match(await ip.locator('[data-panel=integrations]').textContent(),/GitHub/);
+    assert.equal(await ip.locator('#codexDownload').isDisabled(),true);
     assert.deepEqual(ingressErrors,[]);await ing.close();
     console.log('PASS: simulated ingress path, automatic workspace, token hidden, navigation');
   }finally{

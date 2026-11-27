@@ -52,3 +52,6 @@ Set DEVMEMORY_AGENT_TOKEN in Claude Code's process environment. Check /mcp, then
 - https://pypi.org/project/mcp/1.26.0/
 
 CI runs a pinned independent SDK client over stdio, HTTP and HTTPS. It does not certify Codex, Claude Code or physical HAOS network connectivity.
+
+## Windows setup wizard
+After enabling managed HTTPS MCP, open DevMemory > Integrations > MCP and download the Windows setup script. Review it, then in PowerShell run `& .\Connect-DevMemory-Codex.ps1`. It prompts for the agent token without echoing, verifies HTTPS trust and performs MCP initialization, tool discovery and list_projects before registering the server with `codex mcp add`. No token is embedded in the script. Existing devmemory registration is not replaced. By default the token stays in the current PowerShell process; launch Codex from that window. Optional `-PersistToken` stores it in the Windows user environment (not a credential vault); restart clients so they inherit it. `-TestOnly` checks the endpoint without registering Codex. The script does not install certificates, bypass TLS or change execution policy. If Windows blocks it, review the script and unblock that specific downloaded file only if trusted. Actual Windows/Codex acceptance remains pending.

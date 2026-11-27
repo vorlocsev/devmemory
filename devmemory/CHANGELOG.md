@@ -5,6 +5,7 @@
 - Managed HA HTTPS MCP: explicit opt-in, unmapped port by default, TLS certificate from dedicated app configuration folder, fail-closed configuration, authenticated status endpoint.
 - Independent MCP Python SDK 1.26.0 interoperability gate (CI-only dependency): stdio, HTTP and managed HTTPS; client setup guide.
 - Bound context output by serialized byte budget, including Unicode.
+- Authenticated Windows Codex setup download, endpoint prefilled but no token; local HTTPS/MCP probe and native Codex CLI registration.
 - OAuth, modern 2026 protocol and actual Codex/Claude Code acceptance remain pending.
 
 # 0.3.0 — preview

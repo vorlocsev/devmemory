@@ -1,7 +1,8 @@
 # 0.4.0 — preview
 - Local stdio MCP adapter with legacy initialize handshake, six read tools and optional append-only reported memory.
 - Optional project allowlist, bounded input/results and subprocess wire tests.
-- No HTTP MCP endpoint, remote authorization or new HA port yet.
+- Opt-in standalone Streamable HTTP MCP (legacy 2025 revisions), loopback-only, separate bearer token, explicit project allowlist, bounded expiring sessions.
+- No HA network mapping, OAuth, modern 2026 protocol or SSE stream yet.
 
 # 0.3.0 — preview
 - Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.

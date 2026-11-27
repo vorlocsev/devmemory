@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, parse_qs
 from github_sync import GitHubError, normalize_repo, fetch_snapshot, load_token, make_fetcher
 from github_scheduler import SyncBusy, SyncDeferred, run_sync, scheduler_loop
 
-VERSION='0.4.0'
+VERSION='0.4.1'
 KINDS={'decision','evidence','blocker','plan','lesson','note'}
 STATES={'verified','reported','proposed','unknown'}
 SLUG=re.compile(r'[a-z0-9][a-z0-9_-]{0,63}\Z')

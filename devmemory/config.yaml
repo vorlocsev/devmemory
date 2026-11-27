@@ -1,5 +1,5 @@
 name: DevMemory
-version: '0.4.0'
+version: '0.4.1'
 slug: devmemory
 stage: experimental
 description: Local-first development memory with project journal and full-text search

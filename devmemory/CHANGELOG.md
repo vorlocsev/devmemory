@@ -3,7 +3,7 @@
 - Commits, PR head metadata and workflow run attempt/conclusion imported as historical evidence, not acceptance.
 - Deterministic deduplication and transactional journal/FTS writes; changed observations retained.
 - No GitHub token, private repository access or automatic polling in this increment.
-- Logical JSON backup includes imported evidence but not integration bindings; rebind after restore.
+- Logical backup v2 preserves repository bindings and imported evidence; legacy v1 remains accepted.
 
 # 0.2.3 — preview
 - Home Assistant store icon and logo with PNG integrity/dimension tests.

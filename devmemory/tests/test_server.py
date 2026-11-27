@@ -18,6 +18,24 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(dest.entries('beta','провер'),[])
         with self.assertRaises(sqlite3.IntegrityError): dest.restore(backup)
         self.assertEqual(dest.backup(),backup)
+    def test_legacy_backup_restore(self):
+        self.s.add(self.entry())
+        backup=self.s.backup()
+        backup['format']='devmemory-backup-v1'
+        del backup['payload']['github_bindings']
+        backup['sha256']=hashlib.sha256(canonical(backup['payload'])).hexdigest()
+        dest=Store(Path(self.tmp.name)/'legacy')
+        self.assertEqual(dest.restore(backup),{'projects':2,'entries':1})
+        self.assertEqual(dest.entries('alpha'),self.s.entries('alpha'))
+        self.assertEqual(dest.github_binding('alpha')['repository'],'')
+    def test_backup_binding_validation_atomic(self):
+        self.s.bind_github({'project':'alpha','repository':'owner/repo'})
+        backup=self.s.backup()
+        backup['payload']['github_bindings'].append({'project':'missing','repository':'owner/repo'})
+        backup['sha256']=hashlib.sha256(canonical(backup['payload'])).hexdigest()
+        dest=Store(Path(self.tmp.name)/'invalid')
+        with self.assertRaises(ValueError): dest.restore(backup)
+        self.assertEqual(dest.projects(),[])
     def test_backup_corruption_and_invalid_rows(self):
         self.s.add(self.entry()); backup=self.s.backup()
         dest=Store(Path(self.tmp.name)/'restored')

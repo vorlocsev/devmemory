@@ -13,7 +13,8 @@ SLUG=re.compile(r'[a-z0-9][a-z0-9_-]{0,63}\Z')
 SHA=re.compile(r'[a-f0-9]{40}\Z')
 MAX_BODY=1048576
 MAX_BACKUP=4*1024*1024
-BACKUP_FORMAT='devmemory-backup-v1'
+BACKUP_FORMAT='devmemory-backup-v2'
+LEGACY_BACKUP_FORMAT='devmemory-backup-v1'
 PROJECT_FIELDS=('slug','name')
 ENTRY_FIELDS=('id','project','kind','status','title','body','source','sha','created')
 PAGE_SIZE=20
@@ -105,13 +106,13 @@ class Store:
         return {'repository':repo,'observed':len(records),'inserted':inserted,'duplicates':len(records)-inserted,'scope':'latest 5 per endpoint, not exhaustive'}
 
     def backup(self):
-        # A single read transaction captures both tables at the same instant.
+        # One read transaction captures all persistent tables at the same instant.
         # FTS is derived data and is rebuilt on import, not trusted from a file.
-        payload={'projects':[],'entries':[]}
+        payload={'projects':[],'entries':[],'github_bindings':[]}
         used=512
         with self.db() as c:
             c.execute('BEGIN')
-            for table,order in [('projects','slug'),('entries','id')]:
+            for table,order in [('projects','slug'),('entries','id'),('github_bindings','project')]:
                 for row in c.execute('SELECT * FROM '+table+' ORDER BY '+order):
                     item=dict(row)
                     used+=len(canonical(item))+1
@@ -125,15 +126,16 @@ class Store:
 
     def restore(self,backup):
         # No SQL, file paths or SQLite pages from an upload are executed.
-        if set(backup)!={'format','payload','sha256'} or backup['format']!=BACKUP_FORMAT:
+        if set(backup)!={'format','payload','sha256'} or backup['format'] not in (BACKUP_FORMAT,LEGACY_BACKUP_FORMAT):
             raise ValueError('Unsupported backup format')
         payload=backup['payload']
-        if not isinstance(payload,dict) or set(payload)!={'projects','entries'}:
+        expected={'projects','entries','github_bindings'} if backup['format']==BACKUP_FORMAT else {'projects','entries'}
+        if not isinstance(payload,dict) or set(payload)!=expected:
             raise ValueError('Invalid backup payload')
         digest=backup['sha256']
         if not isinstance(digest,str) or not re.fullmatch(r'[a-f0-9]{64}',digest) or not hmac.compare_digest(digest,hashlib.sha256(canonical(payload)).hexdigest()):
             raise ValueError('Backup checksum mismatch')
-        if not all(isinstance(payload[k],list) for k in ('projects','entries')):
+        if not all(isinstance(payload[k],list) for k in expected):
             raise ValueError('Invalid backup collections')
         projects=set(); ids=set()
         for row in payload['projects']:
@@ -155,13 +157,21 @@ class Store:
             try: date=datetime.datetime.fromisoformat(row['created'])
             except ValueError: raise ValueError('Invalid creation date') from None
             if date.tzinfo is None: raise ValueError('Creation date requires timezone')
+        bindings=payload.get('github_bindings',[])
+        bound=set()
+        for row in bindings:
+            validate_row(row,{'project':64,'repository':200})
+            if row['project'] not in projects or row['project'] in bound or normalize_repo(row['repository'])!=row['repository']:
+                raise ValueError('Invalid or duplicate GitHub binding')
+            bound.add(row['project'])
         with self.db() as c:
             c.execute('BEGIN IMMEDIATE')
-            if c.execute('SELECT 1 FROM projects LIMIT 1').fetchone() or c.execute('SELECT 1 FROM entries LIMIT 1').fetchone():
+            if any(c.execute('SELECT 1 FROM '+table+' LIMIT 1').fetchone() for table in ('projects','entries','github_bindings')):
                 raise sqlite3.IntegrityError('Restore requires an empty database')
             c.execute('DELETE FROM search_index')
             c.executemany('INSERT INTO projects VALUES (?,?)',([row[k] for k in PROJECT_FIELDS] for row in payload['projects']))
             c.executemany('INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?)',([row[k] for k in ENTRY_FIELDS] for row in payload['entries']))
+            c.executemany('INSERT INTO github_bindings VALUES (?,?)',((row['project'],row['repository']) for row in bindings))
             c.execute('INSERT INTO search_index SELECT id,project,title,body FROM entries')
         return {'projects':len(projects),'entries':len(ids)}
 

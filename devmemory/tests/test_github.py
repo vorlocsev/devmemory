@@ -40,6 +40,11 @@ class GitHubTests(unittest.TestCase):
             self.assertEqual(len(s.entries('alpha','CI')),3) # two CI runs and PR disclaimer
             self.assertEqual(Store(s.path).github_binding('alpha')['repository'],'owner/repo')
             before=s.backup()
+            restored=Store(Path(d)/'restored')
+            self.assertEqual(restored.restore(before),{'projects':2,'entries':4})
+            self.assertEqual(restored.github_binding('alpha')['repository'],'owner/repo')
+            self.assertEqual(restored.sync_github('alpha',sync)['duplicates'],3)
+            self.assertEqual(restored.backup(),before)
             def fail(repo): raise GitHubError('offline')
             with self.assertRaises(GitHubError): s.sync_github('alpha',fail)
             self.assertEqual(s.backup(),before)

@@ -55,6 +55,10 @@ class HTTPTests(unittest.TestCase):
         req=urllib.request.Request('http://127.0.0.1:'+str(self.s.server_port)+path, data=json.dumps(body).encode() if body is not None else None,headers=h)
         try: return urllib.request.urlopen(req,timeout=3).status
         except urllib.error.HTTPError as e: return e.code
+    def test_health_mode(self):
+        with urllib.request.urlopen('http://127.0.0.1:'+str(self.s.server_port)+'/health',timeout=3) as r:
+            data=json.load(r)
+        self.assertEqual(data,{'status':'ok','version':'0.2.2','mode':'standalone'})
     def test_api_auth(self): self.assertEqual(self.request('/api/projects',token=False),403)
     def test_auth_required_at_start(self):
         with self.assertRaises(ValueError): make_server('127.0.0.1',0,self.tmp.name,'standalone','short')

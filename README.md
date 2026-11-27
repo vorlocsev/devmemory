@@ -1,5 +1,5 @@
 # DevMemory
-Independent, local-first memory for development agents. Preview 0.2.1. Python 3.11+ with SQLite FTS5, no third-party runtime dependencies. No telemetry or cloud calls.
+Independent, local-first memory for development agents. Preview 0.2.2. Python 3.11+ with SQLite FTS5, no third-party runtime dependencies. No telemetry or cloud calls.
 
 ## Home Assistant OS
 Add https://github.com/vorlocsev/devmemory to the app store's Repositories menu, install DevMemory, start it and open Web UI. The image is built locally (internet required to fetch Python base). HAOS acceptance pending. See [app docs](devmemory/DOCS.md).
@@ -18,3 +18,6 @@ python -m unittest discover -s devmemory/tests -v
 
 ## Roadmap
 0.3 read-only exact-head GitHub snapshots and agent context workflow; 0.4 MCP and remote authorization; 0.5 optional embeddings; 1.0 after ARM64/AMD64 builds, HAOS install/backup/restore, security and resource tests. Public registry publishing pending. No private project data is bundled.
+
+## Workspace
+Choose Memory, Projects, Integrations or Settings. Language and appearance preferences are stored locally in the browser; the API token is held only in JavaScript memory. Ingress automatically opens the workspace, while standalone mode requires a token. GitHub and MCP are roadmap placeholders. The database schema is unchanged in 0.2.2. HAOS 0.2.1 has been exercised on ARM64; 0.2.2 device acceptance remains pending.

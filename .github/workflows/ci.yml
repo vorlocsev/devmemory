@@ -11,6 +11,7 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m unittest discover -s devmemory/tests -v
+      - run: node --check devmemory/app.js
   images:
     runs-on: ubuntu-latest
     strategy:

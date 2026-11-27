@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
-VERSION='0.2.1'
+VERSION='0.2.2'
 KINDS={'decision','evidence','blocker','plan','lesson','note'}
 STATES={'verified','reported','proposed','unknown'}
 SLUG=re.compile(r'[a-z0-9][a-z0-9_-]{0,63}\Z')
@@ -115,7 +115,7 @@ class Handler(BaseHTTPRequestHandler):
             if method=='GET' and path in ('/','/app.js','/style.css'):
                 file,mime={'/':('index.html','text/html'),'/app.js':('app.js','application/javascript'),'/style.css':('style.css','text/css')}[path]
                 return self.send(200,(Path(__file__).parent/file).read_text(encoding='utf-8'),mime+'; charset=utf-8')
-            if method=='GET' and path=='/health': return self.send(200,{'status':'ok','version':VERSION})
+            if method=='GET' and path=='/health': return self.send(200,{'status':'ok','version':VERSION,'mode':self.server.mode})
             if method=='GET' and path=='/api/projects': return self.send(200,db.projects())
             if method=='POST' and path=='/api/projects': return self.send(201,db.add_project(self.read_json()))
             if method=='POST' and path=='/api/entries': return self.send(201,db.add(self.read_json()))

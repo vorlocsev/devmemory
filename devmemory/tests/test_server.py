@@ -1,13 +1,41 @@
 import json, tempfile, threading, unittest, sys, urllib.request, urllib.error
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from server import Store,make_server,CONTEXT_CHARS,MAX_WORKERS,PAGE_SIZE
+from server import Store,make_server,CONTEXT_CHARS,MAX_WORKERS,PAGE_SIZE,canonical,MAX_BACKUP
+import hashlib, sqlite3
 
 class StorageTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); self.path=Path(self.tmp.name)/'db'; self.s=Store(self.path)
         for p in ['alpha','beta']: self.s.add_project({'slug':p,'name':p})
     def entry(self,**kw): return dict(project='alpha',kind='note',status='reported',title='Проверка ядра',body='Сборка прошивки',**kw)
+    def test_backup_roundtrip(self):
+        self.s.add(self.entry()); self.s.add(dict(self.entry(),project='beta',title='Other'))
+        backup=self.s.backup(); dest=Store(Path(self.tmp.name)/'restored')
+        self.assertEqual(dest.restore(backup),{'projects':2,'entries':2})
+        self.assertEqual(dest.backup(),backup)
+        self.assertEqual(dest.entries('alpha','провер'),self.s.entries('alpha','провер'))
+        self.assertEqual(dest.entries('beta','провер'),[])
+        with self.assertRaises(sqlite3.IntegrityError): dest.restore(backup)
+        self.assertEqual(dest.backup(),backup)
+    def test_backup_corruption_and_invalid_rows(self):
+        self.s.add(self.entry()); backup=self.s.backup()
+        dest=Store(Path(self.tmp.name)/'restored')
+        backup['payload']['entries'][0]['project']='missing'
+        with self.assertRaisesRegex(ValueError,'checksum'): dest.restore(backup)
+        backup['sha256']=hashlib.sha256(canonical(backup['payload'])).hexdigest()
+        with self.assertRaises(ValueError): dest.restore(backup)
+        self.assertEqual(dest.projects(),[])
+    def test_backup_duplicate_id_atomic(self):
+        self.s.add(self.entry()); backup=self.s.backup()
+        backup['payload']['entries']*=2
+        backup['sha256']=hashlib.sha256(canonical(backup['payload'])).hexdigest()
+        dest=Store(Path(self.tmp.name)/'restored')
+        with self.assertRaises(ValueError): dest.restore(backup)
+        self.assertEqual(dest.projects(),[])
+    def test_backup_size_bound(self):
+        for i in range(22): self.s.add(dict(self.entry(),body='😀'*50000))
+        with self.assertRaisesRegex(ValueError,'4 MiB'): self.s.backup()
     def test_cyrillic_search(self):
         self.s.add(self.entry()); self.assertEqual(len(self.s.entries('alpha','провер ядра')),1)
     def test_project_isolation(self):
@@ -58,7 +86,16 @@ class HTTPTests(unittest.TestCase):
     def test_health_mode(self):
         with urllib.request.urlopen('http://127.0.0.1:'+str(self.s.server_port)+'/health',timeout=3) as r:
             data=json.load(r)
-        self.assertEqual(data,{'status':'ok','version':'0.2.2','mode':'standalone'})
+        self.assertEqual(data,{'status':'ok','version':'0.2.3','mode':'standalone'})
+    def test_backup_api_auth_and_restore(self):
+        self.assertEqual(self.request('/api/backup',token=False),403)
+        self.assertEqual(self.request('/api/restore',{},token=False),403)
+        self.assertEqual(self.request('/api/restore',{},marker=False),400)
+        self.assertEqual(self.request('/api/projects',{'slug':'demo','name':'Demo'}),201)
+        req=urllib.request.Request('http://127.0.0.1:'+str(self.s.server_port)+'/api/backup',headers={'Authorization':'Bearer '+self.token})
+        with urllib.request.urlopen(req,timeout=3) as r: backup=json.load(r)
+        self.assertEqual(self.request('/api/restore',backup),409)
+        self.assertEqual(self.request('/api/restore',{}),400)
     def test_api_auth(self): self.assertEqual(self.request('/api/projects',token=False),403)
     def test_auth_required_at_start(self):
         with self.assertRaises(ValueError): make_server('127.0.0.1',0,self.tmp.name,'standalone','short')

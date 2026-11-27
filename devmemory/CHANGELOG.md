@@ -1,4 +1,4 @@
-# Unreleased
+# 0.4.1 — preview
 - Download repository-specific AGENTS.md from Integrations for the selected project, with explicit project scope, historical-data warnings and permission-aware writes. No credentials, automatic installation or configuration changes.
 
 # 0.4.0 — preview

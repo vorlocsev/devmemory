@@ -1,4 +1,4 @@
-# MCP client setup (DevMemory 0.4.0 preview)
+# MCP client setup (DevMemory 0.4.1 preview)
 
 The examples use the legacy MCP 2025 lifecycle. Physical Windows Codex read/write acceptance was reported in PR #5; Claude Code acceptance is pending. A client that insists on MCP 2026 may not connect. Never bypass TLS verification or expose the endpoint to the public internet.
 

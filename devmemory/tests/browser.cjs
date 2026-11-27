@@ -120,7 +120,7 @@ async function main(){
       const req=route.request(),u=new URL(req.url());
       assert.equal(req.headers().authorization,undefined,'browser must not send token in ingress mode');
       const target=u.pathname.slice('/fixture-ingress'.length)+u.search;
-      if(target==='/health')return route.fulfill({json:{status:'ok',version:'0.3.0',mode:'ingress'}});
+      if(target==='/health')return route.fulfill({json:{status:'ok',version:'0.4.0',mode:'ingress'}});
       const response=await route.fetch({url:origin+target,headers:{...req.headers(),authorization:'Bearer '+token}});
       return route.fulfill({response});
     });
@@ -131,6 +131,7 @@ async function main(){
     assert.ok(await ip.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'no horizontal page overflow in desktop workspace');
     await ip.locator('[data-tab=integrations]').click();await visible(ip,'[data-panel=integrations]');
     assert.match(await ip.locator('[data-panel=integrations]').textContent(),/GitHub/);
+    assert.equal(await ip.locator('#codexDownload').isDisabled(),true);
     assert.deepEqual(ingressErrors,[]);await ing.close();
     console.log('PASS: simulated ingress path, automatic workspace, token hidden, navigation');
   }finally{

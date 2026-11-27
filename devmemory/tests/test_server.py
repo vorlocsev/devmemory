@@ -104,7 +104,7 @@ class HTTPTests(unittest.TestCase):
     def test_health_mode(self):
         with urllib.request.urlopen('http://127.0.0.1:'+str(self.s.server_port)+'/health',timeout=3) as r:
             data=json.load(r)
-        self.assertEqual(data,{'status':'ok','version':'0.3.0','mode':'standalone'})
+        self.assertEqual(data,{'status':'ok','version':'0.4.0','mode':'standalone'})
     def test_backup_api_auth_and_restore(self):
         self.assertEqual(self.request('/api/backup',token=False),403)
         self.assertEqual(self.request('/api/restore',{},token=False),403)
@@ -121,6 +121,19 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('/api/github/binding',{'project':'demo','repository':'https://example.com'},),400)
         self.assertEqual(self.request('/api/github/binding',{'project':'demo','repository':'owner/repo'}),200)
         self.assertEqual(self.request('/api/github/binding?project=demo'),200)
+    def test_codex_setup_download(self):
+        path='/api/mcp/codex-setup'
+        self.assertEqual(self.request(path,token=False),403)
+        self.assertEqual(self.request(path),409)
+        self.s.mcp_status={'state':'enabled','authority':'devmemory.example.local:8100','projects':['demo'],'allow_write':False}
+        req=urllib.request.Request('http://127.0.0.1:'+str(self.s.server_port)+path,headers={'Authorization':'Bearer '+self.token})
+        with urllib.request.urlopen(req,timeout=3) as r: script=r.read().decode()
+        self.assertIn("[string]$Url = 'https://devmemory.example.local:8100/mcp'",script)
+        self.assertNotIn(self.token,script)
+        self.assertIn('AllowAutoRedirect = $false',script)
+        self.assertIn('codex mcp add devmemory',script)
+        self.s.mcp_status['authority']="bad';command"
+        self.assertEqual(self.request(path),409)
     def test_api_auth(self): self.assertEqual(self.request('/api/projects',token=False),403)
     def test_auth_required_at_start(self):
         with self.assertRaises(ValueError): make_server('127.0.0.1',0,self.tmp.name,'standalone','short')

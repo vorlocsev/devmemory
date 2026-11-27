@@ -1,3 +1,13 @@
+# 0.4.0 — preview
+- Local stdio MCP adapter with legacy initialize handshake, six read tools and optional append-only reported memory.
+- Optional project allowlist, bounded input/results and subprocess wire tests.
+- Opt-in standalone Streamable HTTP MCP (legacy 2025 revisions), loopback-only, separate bearer token, explicit project allowlist, bounded expiring sessions.
+- Managed HA HTTPS MCP: explicit opt-in, unmapped port by default, TLS certificate from dedicated app configuration folder, fail-closed configuration, authenticated status endpoint.
+- Independent MCP Python SDK 1.26.0 interoperability gate (CI-only dependency): stdio, HTTP and managed HTTPS; client setup guide.
+- Bound context output by serialized byte budget, including Unicode.
+- Authenticated Windows Codex setup download, endpoint prefilled but no token; local HTTPS/MCP probe and native Codex CLI registration.
+- OAuth, modern 2026 protocol and actual Codex/Claude Code acceptance remain pending.
+
 # 0.3.0 — preview
 - Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.
 - Commits, PR head metadata and workflow run attempt/conclusion imported as historical evidence, not acceptance.

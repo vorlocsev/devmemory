@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, parse_qs
 from github_sync import GitHubError, normalize_repo, fetch_snapshot, load_token, make_fetcher
 from github_scheduler import SyncBusy, SyncDeferred, run_sync, scheduler_loop
 
-VERSION='0.3.0'
+VERSION='0.4.0'
 KINDS={'decision','evidence','blocker','plan','lesson','note'}
 STATES={'verified','reported','proposed','unknown'}
 SLUG=re.compile(r'[a-z0-9][a-z0-9_-]{0,63}\Z')
@@ -315,6 +315,17 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send(409,{'error':'Restore requires an empty database; existing data unchanged'})
                     return self.send(201,result)
                 finally: self.server.backup_slot.release()
+            if method=='GET' and path=='/api/mcp/codex-setup':
+                status=self.server.mcp_status
+                if status['state']!='enabled': return self.send(409,{'error':'Enable managed HTTPS MCP first'})
+                from mcp_http import valid_authority
+                authority=status.get('authority')
+                if not valid_authority(authority): return self.send(409,{'error':'Invalid MCP authority'})
+                script=(Path(__file__).parent/'connect-codex.ps1').read_text(encoding='utf-8')
+                script=script.replace("[string]$Url = '__DEVMEMORY_URL__'","[string]$Url = 'https://"+authority+"/mcp'",1)
+                return self.send(200,script,'text/plain; charset=utf-8')
+            if method=='GET' and path=='/api/mcp/status':
+                return self.send(200,self.server.mcp_status)
             if method=='GET' and path=='/api/github/auth':
                 return self.send(200,{'configured':self.server.github_configured})
             if method=='GET' and path=='/api/github/binding':
@@ -373,13 +384,18 @@ def make_server(host,port,data,mode,token='',github_token=''):
     if mode not in ('standalone','ingress'): raise ValueError('Invalid mode')
     if mode=='standalone' and len(token)<32: raise ValueError('Set DEVMEMORY_TOKEN (at least 32 characters)')
     fetcher=make_fetcher(github_token)
-    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.github_slot=threading.BoundedSemaphore(1); s.github_fetcher=fetcher; s.github_configured=bool(github_token); s.mode=mode; s.token=token; return s
+    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.github_slot=threading.BoundedSemaphore(1); s.github_fetcher=fetcher; s.github_configured=bool(github_token); s.mcp_status={'state':'disabled','projects':[],'allow_write':False}; s.mode=mode; s.token=token; return s
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--host',default=os.getenv('DEVMEMORY_HOST','127.0.0.1')); p.add_argument('--port',type=int,default=int(os.getenv('DEVMEMORY_PORT','8099'))); p.add_argument('--data',default=os.getenv('DEVMEMORY_DATA','./data')); p.add_argument('--mode',choices=['standalone','ingress'],default=os.getenv('DEVMEMORY_MODE','standalone')); a=p.parse_args()
     try: github_token=load_token(a.mode,a.data,os.environ)
     except ValueError as e: p.error(str(e))
     s=make_server(a.host,a.port,a.data,a.mode,os.getenv('DEVMEMORY_TOKEN',''),github_token); print(f'DevMemory {VERSION}: {a.host}:{a.port} ({a.mode})',flush=True)
+    managed=None
+    if a.mode=='ingress':
+        from mcp_managed import start_managed
+        managed,s.mcp_status=start_managed(s.store,a.data,github_token)
+        print('DevMemory MCP: '+s.mcp_status['state'],flush=True)
     stop_scheduler=threading.Event()
     s.store.recover_github()
     worker=threading.Thread(target=scheduler_loop,args=(s.store,s.github_slot,stop_scheduler,s.github_fetcher),daemon=True,name='github-scheduler')
@@ -394,4 +410,5 @@ def main():
         stop_scheduler.set()
         s.server_close()
         worker.join(timeout=1)
+        if managed: managed.close()
 if __name__=='__main__': main()

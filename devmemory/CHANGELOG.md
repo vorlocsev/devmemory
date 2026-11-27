@@ -1,3 +1,7 @@
+# 0.4.2 — preview
+- Create a project, optional GitHub binding and opt-in polling schedule atomically in one form. No immediate API request, no overwrite of existing projects and no automatic MCP grant.
+- Browser, storage and HTTP regression tests cover setup, input validation, duplicate conflict and authorization.
+
 # 0.4.1 — preview
 - Download repository-specific AGENTS.md from Integrations for the selected project, with explicit project scope, historical-data warnings and permission-aware writes. No credentials, automatic installation or configuration changes.
 

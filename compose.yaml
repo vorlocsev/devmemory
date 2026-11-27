@@ -3,6 +3,7 @@ services:
     build: ./devmemory
     environment:
       DEVMEMORY_MODE: standalone
+      DEVMEMORY_GITHUB_TOKEN: ${DEVMEMORY_GITHUB_TOKEN:-}
       DEVMEMORY_TOKEN: ${DEVMEMORY_TOKEN:?Set a random token of at least 32 characters}
     ports:
       - '127.0.0.1:8099:8099'

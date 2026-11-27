@@ -39,9 +39,9 @@ def scheduler_tick(store,lock,fetcher=fetch_snapshot,clock=time.time):
     except (SyncBusy,SyncDeferred,GitHubError,ValueError,sqlite3.Error):
         return None
 
-def scheduler_loop(store,lock,stop):
+def scheduler_loop(store,lock,stop,fetcher=fetch_snapshot):
     while not stop.wait(30):
-        try: scheduler_tick(store,lock)
+        try: scheduler_tick(store,lock,fetcher=fetcher)
         except sqlite3.Error:
             # Never log repository content or secrets. Retry at the next tick.
             pass

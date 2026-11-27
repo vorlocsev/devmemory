@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
-from github_sync import GitHubError, normalize_repo, fetch_snapshot
+from github_sync import GitHubError, normalize_repo, fetch_snapshot, load_token, make_fetcher
 from github_scheduler import SyncBusy, SyncDeferred, run_sync, scheduler_loop
 
 VERSION='0.3.0'
@@ -315,6 +315,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send(409,{'error':'Restore requires an empty database; existing data unchanged'})
                     return self.send(201,result)
                 finally: self.server.backup_slot.release()
+            if method=='GET' and path=='/api/github/auth':
+                return self.send(200,{'configured':self.server.github_configured})
             if method=='GET' and path=='/api/github/binding':
                 return self.send(200,db.github_binding(q.get('project',[''])[0]))
             if method=='GET' and path=='/api/github/settings':
@@ -328,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
                 finally: self.server.github_slot.release()
             if method=='POST' and path=='/api/github/sync':
                 d=self.read_json(); project=field(d,'project',64)
-                try: return self.send(200,run_sync(db,self.server.github_slot,project))
+                try: return self.send(200,run_sync(db,self.server.github_slot,project,fetcher=self.server.github_fetcher))
                 except SyncBusy: return self.send(503,{'error':'GitHub sync busy'})
                 except SyncDeferred as e: return self.send(429,{'error':str(e),'retry_after':e.seconds})
                 except GitHubError as e: return self.send(502,{'error':str(e)})
@@ -367,17 +369,20 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         try: super().process_request_thread(request,address)
         finally: self.slots.release()
 
-def make_server(host,port,data,mode,token=''):
+def make_server(host,port,data,mode,token='',github_token=''):
     if mode not in ('standalone','ingress'): raise ValueError('Invalid mode')
     if mode=='standalone' and len(token)<32: raise ValueError('Set DEVMEMORY_TOKEN (at least 32 characters)')
-    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.github_slot=threading.BoundedSemaphore(1); s.mode=mode; s.token=token; return s
+    fetcher=make_fetcher(github_token)
+    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.github_slot=threading.BoundedSemaphore(1); s.github_fetcher=fetcher; s.github_configured=bool(github_token); s.mode=mode; s.token=token; return s
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--host',default=os.getenv('DEVMEMORY_HOST','127.0.0.1')); p.add_argument('--port',type=int,default=int(os.getenv('DEVMEMORY_PORT','8099'))); p.add_argument('--data',default=os.getenv('DEVMEMORY_DATA','./data')); p.add_argument('--mode',choices=['standalone','ingress'],default=os.getenv('DEVMEMORY_MODE','standalone')); a=p.parse_args()
-    s=make_server(a.host,a.port,a.data,a.mode,os.getenv('DEVMEMORY_TOKEN','')); print(f'DevMemory {VERSION}: {a.host}:{a.port} ({a.mode})',flush=True)
+    try: github_token=load_token(a.mode,a.data,os.environ)
+    except ValueError as e: p.error(str(e))
+    s=make_server(a.host,a.port,a.data,a.mode,os.getenv('DEVMEMORY_TOKEN',''),github_token); print(f'DevMemory {VERSION}: {a.host}:{a.port} ({a.mode})',flush=True)
     stop_scheduler=threading.Event()
     s.store.recover_github()
-    worker=threading.Thread(target=scheduler_loop,args=(s.store,s.github_slot,stop_scheduler),daemon=True,name='github-scheduler')
+    worker=threading.Thread(target=scheduler_loop,args=(s.store,s.github_slot,stop_scheduler,s.github_fetcher),daemon=True,name='github-scheduler')
     worker.start()
     def stop(signum,frame):
         stop_scheduler.set()

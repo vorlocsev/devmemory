@@ -1,8 +1,9 @@
-import tempfile, unittest, sys
+import tempfile, unittest, sys, json, io, urllib.error
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from server import Store
-from github_sync import fetch_snapshot, normalize_repo, GitHubError
+from github_sync import fetch_snapshot, normalize_repo, GitHubError, load_token, request_json, make_fetcher, NoRedirect
 
 A='a'*40
 B='b'*40
@@ -13,6 +14,39 @@ def fixture(path,conclusion='success'):
     raise AssertionError(path)
 
 class GitHubTests(unittest.TestCase):
+    def test_token_config(self):
+        token='github_pat_'+'A'*40
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'options.json'
+            p.write_text(json.dumps({'github_token':token}))
+            self.assertEqual(load_token('ingress',d,{}),token)
+            self.assertEqual(load_token('standalone',d,{'DEVMEMORY_GITHUB_TOKEN':token}),token)
+            self.assertEqual(load_token('standalone',d,{}),'')
+            p.write_text('{"github_token":"invalid-secret"}')
+            with self.assertRaisesRegex(ValueError,'Invalid GitHub credential configuration'): load_token('ingress',d,{})
+    def test_token_only_on_fixed_get(self):
+        token='github_pat_'+'A'*40
+        response=MagicMock()
+        response.__enter__.return_value.read.return_value=b'[]'
+        with patch('github_sync.urllib.request.build_opener') as build:
+            build.return_value.open.return_value=response
+            self.assertEqual(request_json('/repos/a/b/commits?per_page=5',token),[])
+            req=build.return_value.open.call_args.args[0]
+            self.assertEqual(req.full_url,'https://api.github.com/repos/a/b/commits?per_page=5')
+            self.assertEqual(req.get_method(),'GET')
+            self.assertEqual(req.get_header('Authorization'),'Bearer '+token)
+            self.assertIsInstance(build.call_args.args[1],NoRedirect)
+            self.assertIsNone(NoRedirect().redirect_request(None,None,302,None,None,'https://example.com'))
+            for path in ('https://evil.example','/repos/a/../commits?per_page=5','/repos/a/b/issues'):
+                with self.assertRaises(GitHubError): request_json(path,token)
+            self.assertEqual(build.return_value.open.call_count,1)
+    def test_credential_redaction(self):
+        token='github_pat_'+'A'*40
+        with patch('github_sync.request_json') as req:
+            req.side_effect=lambda p,token='': [{'sha':A,'commit':{'message':token}}] if '/commits?' in p else fixture(p)
+            rows=make_fetcher(token)('owner/repo')
+            self.assertNotIn(token,json.dumps(rows))
+            self.assertIn('[REDACTED]',rows[0]['body'])
     def test_validate_repo(self):
         for bad in ['https://github.com/a/b','a/..','a/b?x=1','a/b/c','a@b/c']:
             with self.assertRaises(ValueError): normalize_repo(bad)

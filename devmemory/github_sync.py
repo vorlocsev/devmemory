@@ -1,5 +1,7 @@
-"""Bounded public GitHub read-only snapshots. Never send local memory or follow redirects."""
+"""Bounded GitHub GET snapshots. Credentials never enter the journal or follow redirects."""
 import json, re, urllib.request, urllib.error
+from pathlib import Path
+from functools import partial
 from urllib.parse import quote
 
 REPO=re.compile(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}\Z')
@@ -18,17 +20,46 @@ def normalize_repo(value):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs): return None
 
-def request_json(path):
+def validate_token(value):
+    # Fine-grained PAT format only. The prefix does not prove its permissions.
+    if not isinstance(value,str) or (value and not re.fullmatch(r'github_pat_[A-Za-z0-9_]{20,250}',value)):
+        raise ValueError('Configure an empty or valid fine-grained GitHub PAT')
+    return value
+
+def load_token(mode,data,environ):
+    if mode=='standalone':
+        return validate_token(environ.get('DEVMEMORY_GITHUB_TOKEN',''))
+    path=Path(data)/'options.json'
+    if not path.exists(): return ''
+    try:
+        with path.open('rb') as file:
+            raw=file.read(65537)
+        if len(raw)>65536: raise ValueError()
+        options=json.loads(raw)
+        if not isinstance(options,dict): raise ValueError()
+        return validate_token(options.get('github_token',''))
+    except (OSError,ValueError,RecursionError):
+        raise ValueError('Invalid GitHub credential configuration; check app options') from None
+
+def request_json(path,token=''):
+    # No arbitrary URL, hostname, redirect or mutating HTTP method.
+    allowed=r'/repos/[a-z0-9][a-z0-9-]{0,38}/[a-z0-9_.-]{1,100}/(?:commits\?per_page=5|pulls\?state=all&sort=updated&direction=desc&per_page=5|actions/runs\?per_page=5)'
+    if not re.fullmatch(allowed,path) or path.split('/')[3] in ('.','..'):
+        raise GitHubError('Disallowed GitHub API path')
+    token=validate_token(token)
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
-    req=urllib.request.Request('https://api.github.com'+path,headers={
+    headers={
         'Accept':'application/vnd.github+json','User-Agent':'DevMemory/0.3.0',
-        'X-GitHub-Api-Version':'2022-11-28'},method='GET')
+        'X-GitHub-Api-Version':'2022-11-28'}
+    if token: headers['Authorization']='Bearer '+token
+    req=urllib.request.Request('https://api.github.com'+path,headers=headers,method='GET')
     try:
         with opener.open(req,timeout=4) as response:
             raw=response.read(MAX_RESPONSE+1)
             if len(raw)>MAX_RESPONSE: raise GitHubError('GitHub response exceeds limit')
             return json.loads(raw)
     except urllib.error.HTTPError as e:
+        if e.code==401: raise GitHubError('GitHub credential rejected; check token configuration') from None
         if e.code in (403,429): raise GitHubRateLimit('GitHub rate limit or access denied; retry later') from None
         raise GitHubError('GitHub HTTP '+str(e.code)) from None
     except (OSError,ValueError,RecursionError):
@@ -76,3 +107,16 @@ def fetch_snapshot(repository,fetch=request_json):
         return out
     except (KeyError,TypeError,AttributeError,IndexError):
         raise GitHubError('Unexpected GitHub response shape') from None
+
+
+def make_fetcher(token):
+    token=validate_token(token)
+    def fetch(repository):
+        records=fetch_snapshot(repository,partial(request_json,token=token))
+        # Never persist an exact configured secret, even if an upstream message echoes it.
+        if token:
+            for record in records:
+                for key in ('title','body','source'):
+                    record[key]=record[key].replace(token,'[REDACTED]')
+        return records
+    return fetch

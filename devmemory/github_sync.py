@@ -8,6 +8,7 @@ LIMIT=5
 MAX_RESPONSE=512*1024
 
 class GitHubError(Exception): pass
+class GitHubRateLimit(GitHubError): pass
 
 def normalize_repo(value):
     if not isinstance(value,str) or not REPO.fullmatch(value) or value.split('/')[1] in ('.','..'):
@@ -28,7 +29,7 @@ def request_json(path):
             if len(raw)>MAX_RESPONSE: raise GitHubError('GitHub response exceeds limit')
             return json.loads(raw)
     except urllib.error.HTTPError as e:
-        if e.code in (403,429): raise GitHubError('GitHub rate limit or access denied; retry later') from None
+        if e.code in (403,429): raise GitHubRateLimit('GitHub rate limit or access denied; retry later') from None
         raise GitHubError('GitHub HTTP '+str(e.code)) from None
     except (OSError,ValueError,RecursionError):
         raise GitHubError('GitHub unavailable or invalid response') from None

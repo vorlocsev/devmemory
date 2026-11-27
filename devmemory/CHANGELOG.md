@@ -2,7 +2,8 @@
 - Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.
 - Commits, PR head metadata and workflow run attempt/conclusion imported as historical evidence, not acceptance.
 - Deterministic deduplication and transactional journal/FTS writes; changed observations retained.
-- No GitHub token, private repository access or automatic polling in this increment.
+- Opt-in automatic polling, persisted interval and shared five-minute gate; one-hour pause after HTTP 403/429; latest 20 attempts per project.
+- No GitHub token or private repository access. Logical backup deliberately excludes scheduling, attempt history and cooldown; restored bindings require explicit re-enabling.
 - Logical backup v2 preserves repository bindings and imported evidence; legacy v1 remains accepted.
 
 # 0.2.3 — preview

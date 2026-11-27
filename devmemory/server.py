@@ -1,10 +1,11 @@
 """DevMemory: local-first project memory, standard library only."""
-import argparse, datetime, hashlib, hmac, json, os, re, signal, sqlite3, threading, uuid
+import argparse, datetime, hashlib, hmac, json, os, re, signal, sqlite3, threading, uuid, time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 from github_sync import GitHubError, normalize_repo, fetch_snapshot
+from github_scheduler import SyncBusy, SyncDeferred, run_sync, scheduler_loop
 
 VERSION='0.3.0'
 KINDS={'decision','evidence','blocker','plan','lesson','note'}
@@ -28,6 +29,11 @@ class Store:
             c.executescript('''CREATE TABLE IF NOT EXISTS projects(slug TEXT PRIMARY KEY, name TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS entries(id TEXT PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(slug), kind TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, sha TEXT NOT NULL, created TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS github_bindings(project TEXT PRIMARY KEY REFERENCES projects(slug), repository TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS github_schedule(project TEXT PRIMARY KEY REFERENCES projects(slug), interval_minutes INTEGER NOT NULL, next_due INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS github_sync_log(id INTEGER PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(slug), repository TEXT NOT NULL, started INTEGER NOT NULL, finished INTEGER, state TEXT NOT NULL, inserted INTEGER NOT NULL DEFAULT 0, duplicates INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '');
+            CREATE INDEX IF NOT EXISTS github_sync_log_project ON github_sync_log(project,id);
+            CREATE TABLE IF NOT EXISTS github_gate(id INTEGER PRIMARY KEY CHECK(id=1), next_allowed INTEGER NOT NULL);
+            INSERT OR IGNORE INTO github_gate VALUES (1,0);
             CREATE INDEX IF NOT EXISTS entries_project ON entries(project,created);
             CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(id UNINDEXED, project UNINDEXED, title, body, tokenize='unicode61');''')
     @contextmanager
@@ -83,8 +89,66 @@ class Store:
         with self.db() as c:
             c.execute('BEGIN IMMEDIATE')
             if not c.execute('SELECT 1 FROM projects WHERE slug=?',(p,)).fetchone(): raise ValueError('Unknown project')
+            previous=c.execute('SELECT repository FROM github_bindings WHERE project=?',(p,)).fetchone()
+            if previous and previous['repository']!=repo:
+                c.execute('DELETE FROM github_schedule WHERE project=?',(p,))
             c.execute('INSERT INTO github_bindings VALUES (?,?) ON CONFLICT(project) DO UPDATE SET repository=excluded.repository',(p,repo))
         return {'project':p,'repository':repo}
+
+    def github_settings(self,project):
+        self.github_binding(project)
+        with self.db() as c:
+            r=c.execute('SELECT interval_minutes,next_due FROM github_schedule WHERE project=?',(project,)).fetchone()
+            log=[dict(row) for row in c.execute('SELECT repository,started,finished,state,inserted,duplicates,error FROM github_sync_log WHERE project=? ORDER BY id DESC LIMIT 20',(project,))]
+            gate=c.execute('SELECT next_allowed FROM github_gate WHERE id=1').fetchone()[0]
+        return {'interval_minutes':r['interval_minutes'] if r else 0,'next_due':r['next_due'] if r else 0,'next_allowed':gate,'history':log}
+
+    def configure_github(self,d,now=None):
+        p=field(d,'project',64); minutes=d.get('interval_minutes')
+        if type(minutes) is not int or minutes not in (0,60,120,360,1440):
+            raise ValueError('Invalid sync interval')
+        now=int(time.time()) if now is None else now
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM github_bindings WHERE project=?',(p,)).fetchone():
+                raise ValueError('Bind a GitHub repository first')
+            c.execute('INSERT INTO github_schedule VALUES (?,?,?) ON CONFLICT(project) DO UPDATE SET interval_minutes=excluded.interval_minutes,next_due=excluded.next_due',(p,minutes,now+minutes*60 if minutes else 0))
+        return self.github_settings(p)
+
+    def due_github(self,now):
+        with self.db() as c:
+            if c.execute('SELECT next_allowed FROM github_gate WHERE id=1').fetchone()[0]>now: return None
+            r=c.execute('SELECT project FROM github_schedule WHERE interval_minutes>0 AND next_due<=? ORDER BY next_due,project LIMIT 1',(now,)).fetchone()
+            return r['project'] if r else None
+
+    def begin_github(self,project,automatic,now):
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            binding=c.execute('SELECT repository FROM github_bindings WHERE project=?',(project,)).fetchone()
+            if not binding: raise ValueError('Bind a GitHub repository first')
+            schedule=c.execute('SELECT interval_minutes,next_due FROM github_schedule WHERE project=?',(project,)).fetchone()
+            if automatic and (not schedule or not schedule['interval_minutes'] or schedule['next_due']>now):
+                return None
+            gate=c.execute('SELECT next_allowed FROM github_gate WHERE id=1').fetchone()[0]
+            if gate>now: raise SyncDeferred(gate-now)
+            # One request batch (three GETs maximum) per five minutes across all projects.
+            c.execute('UPDATE github_gate SET next_allowed=? WHERE id=1',(now+300,))
+            if schedule and schedule['interval_minutes']:
+                c.execute('UPDATE github_schedule SET next_due=? WHERE project=?',(now+schedule['interval_minutes']*60,project))
+            job=c.execute("INSERT INTO github_sync_log(project,repository,started,state) VALUES (?,?,?,'running')",(project,binding['repository'],now)).lastrowid
+            c.execute('DELETE FROM github_sync_log WHERE project=? AND id NOT IN (SELECT id FROM github_sync_log WHERE project=? ORDER BY id DESC LIMIT 20)',(project,project))
+            return job
+
+    def finish_github(self,job,now,result=None,error='',rate_limited=False):
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute('UPDATE github_sync_log SET finished=?,state=?,inserted=?,duplicates=?,error=? WHERE id=?',(now,'success' if result is not None else 'error',result['inserted'] if result else 0,result['duplicates'] if result else 0,error[:250],job))
+            if rate_limited:
+                c.execute('UPDATE github_gate SET next_allowed=max(next_allowed,?) WHERE id=1',(now+3600,))
+
+    def recover_github(self):
+        with self.db() as c:
+            c.execute("UPDATE github_sync_log SET state='interrupted',finished=?,error='Previous process stopped during sync' WHERE state='running'",(int(time.time()),))
 
     def sync_github(self,project,fetcher=fetch_snapshot):
         repo=self.github_binding(project)['repository']
@@ -253,15 +317,21 @@ class Handler(BaseHTTPRequestHandler):
                 finally: self.server.backup_slot.release()
             if method=='GET' and path=='/api/github/binding':
                 return self.send(200,db.github_binding(q.get('project',[''])[0]))
-            if method=='POST' and path=='/api/github/binding':
-                return self.send(200,db.bind_github(self.read_json()))
-            if method=='POST' and path=='/api/github/sync':
-                d=self.read_json(); project=field(d,'project',64)
+            if method=='GET' and path=='/api/github/settings':
+                return self.send(200,db.github_settings(q.get('project',[''])[0]))
+            if method=='POST' and path in ('/api/github/binding','/api/github/settings'):
+                d=self.read_json()
                 if not self.server.github_slot.acquire(blocking=False):
                     return self.send(503,{'error':'GitHub sync busy'})
-                try: return self.send(200,db.sync_github(project))
-                except GitHubError as e: return self.send(502,{'error':str(e)})
+                try:
+                    return self.send(200,db.bind_github(d) if path.endswith('/binding') else db.configure_github(d))
                 finally: self.server.github_slot.release()
+            if method=='POST' and path=='/api/github/sync':
+                d=self.read_json(); project=field(d,'project',64)
+                try: return self.send(200,run_sync(db,self.server.github_slot,project))
+                except SyncBusy: return self.send(503,{'error':'GitHub sync busy'})
+                except SyncDeferred as e: return self.send(429,{'error':str(e),'retry_after':e.seconds})
+                except GitHubError as e: return self.send(502,{'error':str(e)})
             if method=='GET' and path=='/api/projects': return self.send(200,db.projects())
             if method=='POST' and path=='/api/projects': return self.send(201,db.add_project(self.read_json()))
             if method=='POST' and path=='/api/entries': return self.send(201,db.add(self.read_json()))
@@ -305,10 +375,18 @@ def make_server(host,port,data,mode,token=''):
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--host',default=os.getenv('DEVMEMORY_HOST','127.0.0.1')); p.add_argument('--port',type=int,default=int(os.getenv('DEVMEMORY_PORT','8099'))); p.add_argument('--data',default=os.getenv('DEVMEMORY_DATA','./data')); p.add_argument('--mode',choices=['standalone','ingress'],default=os.getenv('DEVMEMORY_MODE','standalone')); a=p.parse_args()
     s=make_server(a.host,a.port,a.data,a.mode,os.getenv('DEVMEMORY_TOKEN','')); print(f'DevMemory {VERSION}: {a.host}:{a.port} ({a.mode})',flush=True)
+    stop_scheduler=threading.Event()
+    s.store.recover_github()
+    worker=threading.Thread(target=scheduler_loop,args=(s.store,s.github_slot,stop_scheduler),daemon=True,name='github-scheduler')
+    worker.start()
     def stop(signum,frame):
+        stop_scheduler.set()
         threading.Thread(target=s.shutdown,daemon=True).start()
     signal.signal(signal.SIGTERM,stop)
     signal.signal(signal.SIGINT,stop)
     try: s.serve_forever()
-    finally: s.server_close()
+    finally:
+        stop_scheduler.set()
+        s.server_close()
+        worker.join(timeout=1)
 if __name__=='__main__': main()

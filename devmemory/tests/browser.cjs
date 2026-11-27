@@ -62,6 +62,10 @@ async function main(){
     await page.locator('#githubForm button').click();await ready(page);
     assert.equal(await page.locator('#githubRepo').inputValue(),'owner/repo');
     assert.equal(await page.locator('#githubSync').isDisabled(),false);
+    assert.equal(await page.locator('#githubInterval').inputValue(),'0');
+    await page.locator('#githubInterval').selectOption('120');
+    await page.locator('#githubSchedule button').click();await ready(page);
+    assert.equal(await page.locator('#githubInterval').inputValue(),'120');
     // Browser routing fixture exercises sync controls without hitting public API.
     let syncCalls=0;
     await page.route(origin+'/api/github/sync',async route=>{
@@ -83,6 +87,9 @@ async function main(){
     assert.equal(await page.locator('#githubSync').isDisabled(),true);
     await page.locator('#project').selectOption('alpha-test');await ready(page);
     assert.equal(await page.locator('#githubRepo').inputValue(),'owner/repo');
+    assert.equal(await page.locator('#githubInterval').inputValue(),'120');
+    await page.locator('#githubInterval').selectOption('0');
+    await page.locator('#githubSchedule button').click();await ready(page);
     await page.locator('[data-tab=memory]').click();
     const dl=page.waitForEvent('download');await page.locator('#export').click();
     assert.equal((await dl).suggestedFilename(),'alpha-test-context.md');await ready(page);

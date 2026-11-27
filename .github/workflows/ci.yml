@@ -30,3 +30,16 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: BUILD_ARCH=${{ matrix.arch }}
           push: false
+          load: true
+          tags: devmemory-smoke:local
+      - name: Runtime smoke test
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          name=devmemory-smoke
+          trap 'docker logs "$name" || true; docker rm -f "$name" || true' EXIT
+          docker run -d --name "$name" --platform "$PLATFORM" -e DEVMEMORY_MODE=standalone -e DEVMEMORY_TOKEN=smoke-test-only-not-a-real-secret-0000 devmemory-smoke:local
+          docker exec "$name" python -c "import time,urllib.request; time.sleep(2); assert urllib.request.urlopen('http://127.0.0.1:8099/health',timeout=10).status==200; r=urllib.request.Request('http://127.0.0.1:8099/api/projects',headers={'Authorization':'Bearer smoke-test-only-not-a-real-secret-0000'}); assert urllib.request.urlopen(r,timeout=10).read()==b'[]'"
+          docker stop -t 15 "$name"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" = 0

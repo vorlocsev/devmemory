@@ -1,5 +1,5 @@
 name: DevMemory
-version: '0.2.0'
+version: '0.2.1'
 slug: devmemory
 description: Local-first development memory with project journal and full-text search
 url: https://github.com/vorlocsev/devmemory

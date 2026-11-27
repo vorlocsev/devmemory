@@ -1,5 +1,5 @@
 # DevMemory
-Independent, local-first memory for development agents. Preview 0.2.0. Python 3.11+ with SQLite FTS5, no third-party runtime dependencies. No telemetry or cloud calls.
+Independent, local-first memory for development agents. Preview 0.2.1. Python 3.11+ with SQLite FTS5, no third-party runtime dependencies. No telemetry or cloud calls.
 
 ## Home Assistant OS
 Add https://github.com/vorlocsev/devmemory to the app store's Repositories menu, install DevMemory, start it and open Web UI. The image is built locally (internet required to fetch Python base). HAOS acceptance pending. See [app docs](devmemory/DOCS.md).
@@ -11,7 +11,7 @@ Set DEVMEMORY_TOKEN to a random secret of at least 32 characters in your shell o
 Set the same environment variable and run python devmemory/server.py. Default listener is loopback port 8099 and data directory is ./data. Change with --data, --host, --port; use TLS and a reviewed authentication strategy before remote deployment.
 
 ## API
-GET /api/projects; POST /api/projects (slug, name); POST /api/entries (project, kind, status, title, body, optional source, sha); GET /api/entries?project=demo&q=search&offset=0 (100/page); GET /api/context?project=demo (30 recent records, Markdown); POST /api/delete (project, id). Standalone API uses Authorization: Bearer <token>; POST also requires Content-Type: application/json and X-DevMemory: 1. Ingress relies on HA login and verifies supervisor peer IP. No CORS. No external API exposure in HA mode.
+GET /api/projects; POST /api/projects (slug, name); POST /api/entries (project, kind, status, title, body, optional source, sha); GET /api/entries?project=demo&q=search&offset=0 (20/page); GET /api/context?project=demo (up to 30 recent records, 32768 character budget, Markdown); POST /api/delete (project, id). Standalone API uses Authorization: Bearer <token>; POST also requires Content-Type: application/json and X-DevMemory: 1. Ingress relies on HA login and verifies supervisor peer IP. No CORS. No external API exposure in HA mode.
 
 ## Tests
 python -m unittest discover -s devmemory/tests -v

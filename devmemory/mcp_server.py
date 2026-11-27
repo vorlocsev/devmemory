@@ -56,7 +56,18 @@ class MemoryTools:
                     rows.append(dict(row))
                     if len(rows)>limit: break
             return self.page(rows,limit,args.get('offset',0))
-        if name=='get_context': return {'notice':NOTICE,'context':self.store.context(p)}
+        if name=='get_context':
+            context=self.store.context(p)
+            out={'notice':NOTICE,'context':context}
+            if len(dump(out))>MAX_RESULT:
+                marker='\n\n[Context limited by MCP response byte budget.]'
+                low,high=0,len(context)
+                while low<high:
+                    mid=(low+high+1)//2
+                    if len(dump({'notice':NOTICE,'context':context[:mid]+marker}))<=MAX_RESULT: low=mid
+                    else: high=mid-1
+                out['context']=context[:low]+marker
+            return out
         if name=='add_memory':
             return {'notice':'Recorded as agent-reported, not independently verified.',**self.store.add(dict(args,status='reported'))}
         if name=='search_memory':

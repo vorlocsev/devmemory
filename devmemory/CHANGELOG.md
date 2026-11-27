@@ -3,7 +3,9 @@
 - Optional project allowlist, bounded input/results and subprocess wire tests.
 - Opt-in standalone Streamable HTTP MCP (legacy 2025 revisions), loopback-only, separate bearer token, explicit project allowlist, bounded expiring sessions.
 - Managed HA HTTPS MCP: explicit opt-in, unmapped port by default, TLS certificate from dedicated app configuration folder, fail-closed configuration, authenticated status endpoint.
-- OAuth, modern 2026 protocol and real third-party client acceptance remain pending.
+- Independent MCP Python SDK 1.26.0 interoperability gate (CI-only dependency): stdio, HTTP and managed HTTPS; client setup guide.
+- Bound context output by serialized byte budget, including Unicode.
+- OAuth, modern 2026 protocol and actual Codex/Claude Code acceptance remain pending.
 
 # 0.3.0 — preview
 - Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.

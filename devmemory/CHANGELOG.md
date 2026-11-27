@@ -1,3 +1,8 @@
+# 0.4.0 — preview
+- Local stdio MCP adapter with legacy initialize handshake, six read tools and optional append-only reported memory.
+- Optional project allowlist, bounded input/results and subprocess wire tests.
+- No HTTP MCP endpoint, remote authorization or new HA port yet.
+
 # 0.3.0 — preview
 - Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.
 - Commits, PR head metadata and workflow run attempt/conclusion imported as historical evidence, not acceptance.

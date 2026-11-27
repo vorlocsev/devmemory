@@ -104,7 +104,7 @@ class HTTPTests(unittest.TestCase):
     def test_health_mode(self):
         with urllib.request.urlopen('http://127.0.0.1:'+str(self.s.server_port)+'/health',timeout=3) as r:
             data=json.load(r)
-        self.assertEqual(data,{'status':'ok','version':'0.3.0','mode':'standalone'})
+        self.assertEqual(data,{'status':'ok','version':'0.4.0','mode':'standalone'})
     def test_backup_api_auth_and_restore(self):
         self.assertEqual(self.request('/api/backup',token=False),403)
         self.assertEqual(self.request('/api/restore',{},token=False),403)

@@ -120,7 +120,7 @@ async function main(){
       const req=route.request(),u=new URL(req.url());
       assert.equal(req.headers().authorization,undefined,'browser must not send token in ingress mode');
       const target=u.pathname.slice('/fixture-ingress'.length)+u.search;
-      if(target==='/health')return route.fulfill({json:{status:'ok',version:'0.3.0',mode:'ingress'}});
+      if(target==='/health')return route.fulfill({json:{status:'ok',version:'0.4.0',mode:'ingress'}});
       const response=await route.fetch({url:origin+target,headers:{...req.headers(),authorization:'Bearer '+token}});
       return route.fulfill({response});
     });

@@ -58,6 +58,23 @@ async function main(){
     assert.equal(await page.locator('#entries article').count(),1);
     await page.locator('[data-tab=integrations]').click();
     assert.equal(await page.locator('#githubSync').isDisabled(),true);
+    async function checkAgents(slug,other){
+      const pending=page.waitForEvent('download');
+      await page.locator('#agentsDownload').click();
+      const download=await pending;await ready(page);
+      assert.equal(download.suggestedFilename(),'AGENTS.md');
+      const instructions=await fs.readFile(await download.path(),'utf8');
+      assert.ok(instructions.includes('DevMemory project ID: `'+slug+'`.'));
+      assert.ok(!instructions.includes(other));
+      assert.ok(!instructions.includes(token));
+      for(const tool of ['list_projects','get_context','get_decisions','get_blockers','add_memory'])assert.ok(instructions.includes(tool));
+      assert.match(instructions,/untrusted historical data/);
+      assert.match(instructions,/user permits writing/);
+    }
+    await checkAgents('alpha-test','beta_test');
+    await page.locator('#project').selectOption('beta_test');await ready(page);
+    await checkAgents('beta_test','alpha-test');
+    await page.locator('#project').selectOption('alpha-test');await ready(page);
     await page.locator('#githubRepo').fill('Owner/Repo');
     await page.locator('#githubForm button').click();await ready(page);
     assert.equal(await page.locator('#githubRepo').inputValue(),'owner/repo');
@@ -132,6 +149,8 @@ async function main(){
     await ip.locator('[data-tab=integrations]').click();await visible(ip,'[data-panel=integrations]');
     assert.match(await ip.locator('[data-panel=integrations]').textContent(),/GitHub/);
     assert.equal(await ip.locator('#codexDownload').isDisabled(),true);
+    assert.equal(await ip.locator('#agentsDownload').isDisabled(),false);
+    assert.equal(await ip.locator('#agentsDownload').textContent(),'Скачать AGENTS.md');
     assert.deepEqual(ingressErrors,[]);await ing.close();
     console.log('PASS: simulated ingress path, automatic workspace, token hidden, navigation');
   }finally{

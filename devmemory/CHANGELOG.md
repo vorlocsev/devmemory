@@ -1,3 +1,6 @@
+# Unreleased
+- Download repository-specific AGENTS.md from Integrations for the selected project, with explicit project scope, historical-data warnings and permission-aware writes. No credentials, automatic installation or configuration changes.
+
 # 0.4.0 — preview
 - Local stdio MCP adapter with legacy initialize handshake, six read tools and optional append-only reported memory.
 - Optional project allowlist, bounded input/results and subprocess wire tests.
@@ -6,7 +9,7 @@
 - Independent MCP Python SDK 1.26.0 interoperability gate (CI-only dependency): stdio, HTTP and managed HTTPS; client setup guide.
 - Bound context output by serialized byte budget, including Unicode.
 - Authenticated Windows Codex setup download, endpoint prefilled but no token; local HTTPS/MCP probe and native Codex CLI registration.
-- OAuth, modern 2026 protocol and actual Codex/Claude Code acceptance remain pending.
+- Windows Codex read/write and fresh-session recovery reported in physical acceptance; OAuth, modern 2026 protocol and Claude Code acceptance remain pending.
 
 # 0.3.0 — preview
 - Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.

@@ -4,8 +4,9 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
+from github_sync import GitHubError, normalize_repo, fetch_snapshot
 
-VERSION='0.2.3'
+VERSION='0.3.0'
 KINDS={'decision','evidence','blocker','plan','lesson','note'}
 STATES={'verified','reported','proposed','unknown'}
 SLUG=re.compile(r'[a-z0-9][a-z0-9_-]{0,63}\Z')
@@ -25,6 +26,7 @@ class Store:
             c.execute('PRAGMA journal_mode=WAL')
             c.executescript('''CREATE TABLE IF NOT EXISTS projects(slug TEXT PRIMARY KEY, name TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS entries(id TEXT PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(slug), kind TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, sha TEXT NOT NULL, created TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS github_bindings(project TEXT PRIMARY KEY REFERENCES projects(slug), repository TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS entries_project ON entries(project,created);
             CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(id UNINDEXED, project UNINDEXED, title, body, tokenize='unicode61');''')
     @contextmanager
@@ -68,6 +70,40 @@ class Store:
             r=c.execute('DELETE FROM entries WHERE project=? AND id=?',(project,id))
             if not r.rowcount: return False
             c.execute('DELETE FROM search_index WHERE id=?',(id,)); return True
+    def github_binding(self,project):
+        if not SLUG.fullmatch(project): raise ValueError('Invalid project')
+        with self.db() as c:
+            if not c.execute('SELECT 1 FROM projects WHERE slug=?',(project,)).fetchone(): raise ValueError('Unknown project')
+            r=c.execute('SELECT repository FROM github_bindings WHERE project=?',(project,)).fetchone()
+        return {'project':project,'repository':r['repository'] if r else ''}
+
+    def bind_github(self,d):
+        p=field(d,'project',64); repo=normalize_repo(field(d,'repository',200))
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM projects WHERE slug=?',(p,)).fetchone(): raise ValueError('Unknown project')
+            c.execute('INSERT INTO github_bindings VALUES (?,?) ON CONFLICT(project) DO UPDATE SET repository=excluded.repository',(p,repo))
+        return {'project':p,'repository':repo}
+
+    def sync_github(self,project,fetcher=fetch_snapshot):
+        repo=self.github_binding(project)['repository']
+        if not repo: raise ValueError('Bind a GitHub repository first')
+        records=fetcher(repo)
+        now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+        inserted=0
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            current=c.execute('SELECT repository FROM github_bindings WHERE project=?',(project,)).fetchone()
+            if not current or current['repository']!=repo: raise ValueError('Repository binding changed; retry sync')
+            for item in records:
+                # The state is part of the key: repeated snapshots deduplicate, changed status is historical evidence.
+                identity=hashlib.sha256(canonical([project,repo,item])).hexdigest()[:32]
+                row=(identity,project,'evidence','verified',item['title'],item['body'],item['source'],item['sha'],now)
+                if c.execute('INSERT OR IGNORE INTO entries VALUES (?,?,?,?,?,?,?,?,?)',row).rowcount:
+                    c.execute('INSERT INTO search_index VALUES (?,?,?,?)',(identity,project,item['title'],item['body']))
+                    inserted+=1
+        return {'repository':repo,'observed':len(records),'inserted':inserted,'duplicates':len(records)-inserted,'scope':'latest 5 per endpoint, not exhaustive'}
+
     def backup(self):
         # A single read transaction captures both tables at the same instant.
         # FTS is derived data and is rebuilt on import, not trusted from a file.
@@ -205,6 +241,17 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send(409,{'error':'Restore requires an empty database; existing data unchanged'})
                     return self.send(201,result)
                 finally: self.server.backup_slot.release()
+            if method=='GET' and path=='/api/github/binding':
+                return self.send(200,db.github_binding(q.get('project',[''])[0]))
+            if method=='POST' and path=='/api/github/binding':
+                return self.send(200,db.bind_github(self.read_json()))
+            if method=='POST' and path=='/api/github/sync':
+                d=self.read_json(); project=field(d,'project',64)
+                if not self.server.github_slot.acquire(blocking=False):
+                    return self.send(503,{'error':'GitHub sync busy'})
+                try: return self.send(200,db.sync_github(project))
+                except GitHubError as e: return self.send(502,{'error':str(e)})
+                finally: self.server.github_slot.release()
             if method=='GET' and path=='/api/projects': return self.send(200,db.projects())
             if method=='POST' and path=='/api/projects': return self.send(201,db.add_project(self.read_json()))
             if method=='POST' and path=='/api/entries': return self.send(201,db.add(self.read_json()))
@@ -243,7 +290,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 def make_server(host,port,data,mode,token=''):
     if mode not in ('standalone','ingress'): raise ValueError('Invalid mode')
     if mode=='standalone' and len(token)<32: raise ValueError('Set DEVMEMORY_TOKEN (at least 32 characters)')
-    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.mode=mode; s.token=token; return s
+    db=Store(Path(data)/'memory.sqlite3'); s=BoundedHTTPServer((host,port),Handler); s.store=db; s.backup_slot=threading.BoundedSemaphore(1); s.github_slot=threading.BoundedSemaphore(1); s.mode=mode; s.token=token; return s
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--host',default=os.getenv('DEVMEMORY_HOST','127.0.0.1')); p.add_argument('--port',type=int,default=int(os.getenv('DEVMEMORY_PORT','8099'))); p.add_argument('--data',default=os.getenv('DEVMEMORY_DATA','./data')); p.add_argument('--mode',choices=['standalone','ingress'],default=os.getenv('DEVMEMORY_MODE','standalone')); a=p.parse_args()

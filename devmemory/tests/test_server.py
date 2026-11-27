@@ -86,7 +86,7 @@ class HTTPTests(unittest.TestCase):
     def test_health_mode(self):
         with urllib.request.urlopen('http://127.0.0.1:'+str(self.s.server_port)+'/health',timeout=3) as r:
             data=json.load(r)
-        self.assertEqual(data,{'status':'ok','version':'0.2.3','mode':'standalone'})
+        self.assertEqual(data,{'status':'ok','version':'0.3.0','mode':'standalone'})
     def test_backup_api_auth_and_restore(self):
         self.assertEqual(self.request('/api/backup',token=False),403)
         self.assertEqual(self.request('/api/restore',{},token=False),403)
@@ -96,6 +96,13 @@ class HTTPTests(unittest.TestCase):
         with urllib.request.urlopen(req,timeout=3) as r: backup=json.load(r)
         self.assertEqual(self.request('/api/restore',backup),409)
         self.assertEqual(self.request('/api/restore',{}),400)
+    def test_github_binding_api(self):
+        self.assertEqual(self.request('/api/github/binding?project=demo',token=False),403)
+        self.assertEqual(self.request('/api/github/sync',{'project':'demo'},token=False),403)
+        self.assertEqual(self.request('/api/projects',{'slug':'demo','name':'Demo'}),201)
+        self.assertEqual(self.request('/api/github/binding',{'project':'demo','repository':'https://example.com'},),400)
+        self.assertEqual(self.request('/api/github/binding',{'project':'demo','repository':'owner/repo'}),200)
+        self.assertEqual(self.request('/api/github/binding?project=demo'),200)
     def test_api_auth(self): self.assertEqual(self.request('/api/projects',token=False),403)
     def test_auth_required_at_start(self):
         with self.assertRaises(ValueError): make_server('127.0.0.1',0,self.tmp.name,'standalone','short')

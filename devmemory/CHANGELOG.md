@@ -1,3 +1,10 @@
+# 0.3.0 — preview
+- Public GitHub repository binding and manual read-only sync, five recent objects per endpoint.
+- Commits, PR head metadata and workflow run attempt/conclusion imported as historical evidence, not acceptance.
+- Deterministic deduplication and transactional journal/FTS writes; changed observations retained.
+- No GitHub token, private repository access or automatic polling in this increment.
+- Logical JSON backup includes imported evidence but not integration bindings; rebind after restore.
+
 # 0.2.3 — preview
 - Home Assistant store icon and logo with PNG integrity/dimension tests.
 - Consistent all-project logical JSON backup with SHA-256 integrity check and 4 MiB size bound.

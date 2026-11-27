@@ -46,6 +46,7 @@ async function main(){
     await page.locator('#entryForm [name=body]').fill('Сборка прошивки');
     await page.locator('#entryForm button[data-i=save]').click();await ready(page);
     await visible(page,'#entries article');
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'no horizontal page overflow in connected mobile workspace');
     assert.match(await page.locator('#entries').textContent(),/Проверка ядра/);
     await page.locator('#query').fill('провер'); await page.locator('#searchForm button').click(); await ready(page);
     assert.equal(await page.locator('#entries article').count(),1);
@@ -88,6 +89,7 @@ async function main(){
     assert.equal(await ip.locator('#auth').isVisible(),false);
     assert.equal(await ip.locator('#disconnect').isVisible(),false);
     assert.match(await ip.locator('#entries').textContent(),/Проверка ядра/);
+    assert.ok(await ip.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'no horizontal page overflow in desktop workspace');
     await ip.locator('[data-tab=integrations]').click();await visible(ip,'[data-panel=integrations]');
     assert.match(await ip.locator('[data-panel=integrations]').textContent(),/GitHub/);
     assert.deepEqual(ingressErrors,[]);await ing.close();

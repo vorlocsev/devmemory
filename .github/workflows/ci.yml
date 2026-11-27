@@ -13,7 +13,8 @@ jobs:
       - run: python -m unittest discover -s devmemory/tests -v
       - run: node --check devmemory/app.js
   browser:
-    runs-on: ubuntu-latest
+    # Playwright 1.56.1 supports Ubuntu 24.04, not the current ubuntu-latest (26.04).
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

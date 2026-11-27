@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, parse_qs
 from github_sync import GitHubError, normalize_repo, fetch_snapshot, load_token, make_fetcher
 from github_scheduler import SyncBusy, SyncDeferred, run_sync, scheduler_loop
 
-VERSION='0.4.1'
+VERSION='0.4.2'
 KINDS={'decision','evidence','blocker','plan','lesson','note'}
 STATES={'verified','reported','proposed','unknown'}
 SLUG=re.compile(r'[a-z0-9][a-z0-9_-]{0,63}\Z')
@@ -47,7 +47,21 @@ class Store:
     def add_project(self,d):
         slug=field(d,'slug',64); name=field(d,'name',160)
         if not SLUG.fullmatch(slug): raise ValueError('Invalid project slug')
-        with self.db() as c: c.execute('INSERT INTO projects VALUES (?,?)',(slug,name))
+        repository=field(d,'repository',200,False)
+        interval=d.get('interval_minutes',0)
+        if type(interval) is not int or interval not in (0,60,120,360,1440):
+            raise ValueError('Invalid sync interval')
+        if repository:
+            repository=normalize_repo(repository)
+        elif interval:
+            raise ValueError('Bind a GitHub repository first')
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute('INSERT INTO projects VALUES (?,?)',(slug,name))
+            if repository:
+                c.execute('INSERT INTO github_bindings VALUES (?,?)',(slug,repository))
+                if interval:
+                    c.execute('INSERT INTO github_schedule VALUES (?,?,?)',(slug,interval,int(time.time())+interval*60))
         return {'slug':slug,'name':name}
     def add(self,d):
         p=field(d,'project',64); kind=field(d,'kind',32); status=field(d,'status',32); title=field(d,'title',240); body=field(d,'body',50000); source=field(d,'source',2000,False); sha=field(d,'sha',40,False)

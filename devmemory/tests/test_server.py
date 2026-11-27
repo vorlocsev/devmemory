@@ -66,6 +66,23 @@ class StorageTests(unittest.TestCase):
         d['source']='https://example.com/run';
         with self.assertRaises(ValueError): self.s.add(d)
         d['sha']='a'*40; self.assertIn('id',self.s.add(d))
+    def test_project_setup_atomic(self):
+        self.assertEqual(self.s.add_project({'slug':'gamma','name':'Gamma','repository':'Owner/Repo','interval_minutes':60}),{'slug':'gamma','name':'Gamma'})
+        self.assertEqual(self.s.github_binding('gamma')['repository'],'owner/repo')
+        settings=self.s.github_settings('gamma')
+        self.assertEqual(settings['interval_minutes'],60)
+        self.assertGreater(settings['next_due'],0)
+        self.assertEqual(settings['history'],[])
+        self.s.add_project({'slug':'manual','name':'Manual','repository':'Owner/Other'})
+        self.assertEqual(self.s.github_settings('manual')['interval_minutes'],0)
+        before=self.s.backup()
+        for bad in [{'repository':'https://example.com'},{'interval_minutes':60},{'repository':'owner/repo','interval_minutes':True},{'repository':'owner/repo','interval_minutes':15},{'repository':None}]:
+            with self.assertRaises(ValueError): self.s.add_project(dict(slug='bad',name='Bad',**bad))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.s.add_project({'slug':'gamma','name':'Different','repository':'other/repo','interval_minutes':120})
+        self.assertEqual(self.s.backup(),before)
+        self.assertEqual(self.s.github_settings('gamma')['interval_minutes'],60)
+        self.assertEqual(self.s.entries('gamma'),[])
     def test_invalid_slug(self):
         with self.assertRaises(ValueError): self.s.add_project({'slug':'../bad','name':'bad'})
     def test_unknown_project(self):
@@ -104,7 +121,7 @@ class HTTPTests(unittest.TestCase):
     def test_health_mode(self):
         with urllib.request.urlopen('http://127.0.0.1:'+str(self.s.server_port)+'/health',timeout=3) as r:
             data=json.load(r)
-        self.assertEqual(data,{'status':'ok','version':'0.4.1','mode':'standalone'})
+        self.assertEqual(data,{'status':'ok','version':'0.4.2','mode':'standalone'})
     def test_backup_api_auth_and_restore(self):
         self.assertEqual(self.request('/api/backup',token=False),403)
         self.assertEqual(self.request('/api/restore',{},token=False),403)
@@ -137,6 +154,17 @@ class HTTPTests(unittest.TestCase):
     def test_api_auth(self): self.assertEqual(self.request('/api/projects',token=False),403)
     def test_auth_required_at_start(self):
         with self.assertRaises(ValueError): make_server('127.0.0.1',0,self.tmp.name,'standalone','short')
+    def test_project_setup_api(self):
+        p={'slug':'setup','name':'Setup','repository':'Owner/Repo','interval_minutes':120}
+        self.assertEqual(self.request('/api/projects',p,token=False),403)
+        self.assertEqual(self.request('/api/projects',p,marker=False),400)
+        self.assertEqual(self.s.store.projects(),[])
+        self.assertEqual(self.request('/api/projects',dict(p,repository='invalid')),400)
+        self.assertEqual(self.s.store.projects(),[])
+        self.assertEqual(self.request('/api/projects',p),201)
+        self.assertEqual(self.request('/api/projects',dict(p,repository='other/repo')),409)
+        self.assertEqual(self.s.store.github_binding('setup')['repository'],'owner/repo')
+        self.assertEqual(self.s.store.github_settings('setup')['interval_minutes'],120)
     def test_api_create(self):
         self.assertEqual(self.request('/api/projects',{'slug':'demo','name':'Demo'}),201);self.assertEqual(self.request('/api/projects'),200)
         self.assertEqual(self.request('/api/entries',{'project':'demo','kind':'note','status':'reported','title':'Hello','body':'World'}),201)
